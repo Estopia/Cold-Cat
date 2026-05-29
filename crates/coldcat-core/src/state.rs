@@ -33,8 +33,8 @@ pub fn decode_key(input: &str) -> Result<Vec<u8>> {
     Ok(STANDARD.decode(input.trim())?)
 }
 
-pub fn seal_session(session: &ActiveSession, key: &[u8]) -> Result<SealedSession> {
-    let payload_json = serde_json::to_vec(session)?;
+pub fn seal_session(sessions: &[ActiveSession], key: &[u8]) -> Result<SealedSession> {
+    let payload_json = serde_json::to_vec(sessions)?;
     let payload = STANDARD.encode(payload_json);
     let signature = sign_payload(payload.as_bytes(), key)?;
     Ok(SealedSession {
@@ -44,7 +44,7 @@ pub fn seal_session(session: &ActiveSession, key: &[u8]) -> Result<SealedSession
     })
 }
 
-pub fn open_session(sealed: &SealedSession, key: &[u8]) -> Result<ActiveSession> {
+pub fn open_session(sealed: &SealedSession, key: &[u8]) -> Result<Vec<ActiveSession>> {
     if sealed.version != SEALED_STATE_VERSION {
         return Err(ColdCatError::UnsupportedStateVersion(sealed.version));
     }
@@ -83,6 +83,7 @@ mod tests {
     fn sample_session() -> ActiveSession {
         ActiveSession {
             id: "session".to_string(),
+            name: "Test Block".to_string(),
             started_at: 100,
             end_time: 200,
             sites: vec!["reddit.com".to_string()],
@@ -93,14 +94,16 @@ mod tests {
     #[test]
     fn seals_and_opens_session() {
         let key = generate_key();
-        let sealed = seal_session(&sample_session(), &key).unwrap();
-        assert_eq!(open_session(&sealed, &key).unwrap(), sample_session());
+        let sessions = vec![sample_session()];
+        let sealed = seal_session(&sessions, &key).unwrap();
+        assert_eq!(open_session(&sealed, &key).unwrap(), sessions);
     }
 
     #[test]
     fn detects_tampered_payload() {
         let key = generate_key();
-        let mut sealed = seal_session(&sample_session(), &key).unwrap();
+        let sessions = vec![sample_session()];
+        let mut sealed = seal_session(&sessions, &key).unwrap();
         sealed.payload.push('A');
         assert!(matches!(
             open_session(&sealed, &key),
@@ -110,7 +113,8 @@ mod tests {
 
     #[test]
     fn detects_wrong_key() {
-        let sealed = seal_session(&sample_session(), &generate_key()).unwrap();
+        let sessions = vec![sample_session()];
+        let sealed = seal_session(&sessions, &generate_key()).unwrap();
         assert!(matches!(
             open_session(&sealed, &generate_key()),
             Err(ColdCatError::StateTampered)

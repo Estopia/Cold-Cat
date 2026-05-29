@@ -91,7 +91,7 @@ fn handle_client(stream: TcpStream, engine: Arc<Mutex<Engine>>) -> Result<()> {
 struct Engine {
     store: StateStore,
     enforcer: SystemEnforcer,
-    active: Option<ActiveSession>,
+    active_sessions: Vec<ActiveSession>,
     tampered_state: bool,
     can_stop: Arc<AtomicBool>,
 }
@@ -103,28 +103,28 @@ impl Engine {
         can_stop: Arc<AtomicBool>,
     ) -> Result<Self> {
         let mut tampered_state = false;
-        let active = match store.load() {
-            Ok(session) => session,
+        let active_sessions = match store.load() {
+            Ok(Some(sessions)) => sessions,
+            Ok(None) => Vec::new(),
             Err(err) => {
                 eprintln!("coldcat-daemon refused sealed state: {err:#}");
                 tampered_state = true;
-                None
+                Vec::new()
             }
         };
 
         let now = now_unix()?;
         can_stop.store(
-            active
-                .as_ref()
-                .map(|session| !session.is_active_at(now))
-                .unwrap_or(true),
+            active_sessions
+                .iter()
+                .all(|session| !session.is_active_at(now)),
             Ordering::SeqCst,
         );
 
         Ok(Self {
             store,
             enforcer,
-            active,
+            active_sessions,
             tampered_state,
             can_stop,
         })
@@ -133,10 +133,11 @@ impl Engine {
     fn handle(&mut self, request: CommandRequest) -> CommandResponse {
         match request {
             CommandRequest::Start {
+                name,
                 duration_secs,
                 sites,
                 apps,
-            } => self.start(duration_secs, sites, apps),
+            } => self.start(name, duration_secs, sites, apps),
             CommandRequest::Status => CommandResponse::ok("status", Some(self.status())),
             CommandRequest::Recover => self.recover(),
         }
@@ -144,6 +145,7 @@ impl Engine {
 
     fn start(
         &mut self,
+        name: String,
         duration_secs: u64,
         sites: Vec<String>,
         apps: Vec<String>,
@@ -172,39 +174,39 @@ impl Engine {
             }
         };
 
-        if self
-            .active
-            .as_ref()
-            .map(|session| session.is_active_at(now))
-            .unwrap_or(false)
-        {
+        if self.active_sessions.iter().any(|s| s.name == name && s.is_active_at(now)) {
             return CommandResponse::error(
-                "a block session is already active; refusing to overwrite it before expiry",
+                "this block session is already active; refusing to overwrite it before expiry",
                 Some(self.status()),
             );
         }
 
-        let session = match ActiveSession::new(duration_secs, sites, apps, now) {
+        let session = match ActiveSession::new(name, duration_secs, sites, apps, now) {
             Ok(session) => session,
             Err(err) => return CommandResponse::error(err.to_string(), Some(self.status())),
         };
 
-        if let Err(err) = self.store.save(&session) {
+        self.active_sessions.push(session.clone());
+
+        if let Err(err) = self.store.save(&self.active_sessions) {
+            self.active_sessions.pop();
             return CommandResponse::error(
                 format!("failed to save sealed state: {err:#}"),
                 Some(self.status()),
             );
         }
-        self.active = Some(session.clone());
         self.can_stop.store(false, Ordering::SeqCst);
 
-        if let Err(err) = self.enforcer.apply_hosts(&session.sites) {
+        let all_sites: Vec<String> = self.active_sessions.iter().flat_map(|s| s.sites.clone()).collect();
+        let all_apps: Vec<String> = self.active_sessions.iter().flat_map(|s| s.apps.clone()).collect();
+
+        if let Err(err) = self.enforcer.apply_hosts(&all_sites) {
             return CommandResponse::error(
                 format!("failed to apply hosts block: {err:#}"),
                 Some(self.status()),
             );
         }
-        if let Err(err) = self.enforcer.enforce_apps(&session.apps) {
+        if let Err(err) = self.enforcer.enforce_apps(&all_apps) {
             return CommandResponse::error(
                 format!("failed to enforce app block: {err:#}"),
                 Some(self.status()),
@@ -238,12 +240,7 @@ impl Engine {
             }
         };
 
-        if self
-            .active
-            .as_ref()
-            .map(|session| session.is_active_at(now))
-            .unwrap_or(false)
-        {
+        if self.active_sessions.iter().any(|session| session.is_active_at(now)) {
             return CommandResponse::error(
                 "recover is refused while an enforced session is still active",
                 Some(self.status()),
@@ -265,23 +262,27 @@ impl Engine {
         }
 
         self.cleanup_if_expired()?;
-        if let Some(session) = &self.active {
+        if !self.active_sessions.is_empty() {
             self.can_stop.store(false, Ordering::SeqCst);
-            self.enforcer.apply_hosts(&session.sites)?;
-            self.enforcer.enforce_apps(&session.apps)?;
+            let all_sites: Vec<String> = self.active_sessions.iter().flat_map(|s| s.sites.clone()).collect();
+            let all_apps: Vec<String> = self.active_sessions.iter().flat_map(|s| s.apps.clone()).collect();
+            self.enforcer.apply_hosts(&all_sites)?;
+            self.enforcer.enforce_apps(&all_apps)?;
         }
         Ok(())
     }
 
     fn cleanup_if_expired(&mut self) -> Result<()> {
         let now = now_unix()?;
-        if self
-            .active
-            .as_ref()
-            .map(|session| !session.is_active_at(now))
-            .unwrap_or(false)
-        {
-            self.cleanup()?;
+        let initial_len = self.active_sessions.len();
+        self.active_sessions.retain(|session| session.is_active_at(now));
+
+        if self.active_sessions.len() != initial_len {
+            if self.active_sessions.is_empty() {
+                self.cleanup()?;
+            } else {
+                let _ = self.store.save(&self.active_sessions);
+            }
         }
         Ok(())
     }
@@ -290,22 +291,19 @@ impl Engine {
         self.can_stop.store(true, Ordering::SeqCst);
         self.enforcer.clear_hosts()?;
         self.store.clear()?;
-        self.active = None;
+        self.active_sessions.clear();
         Ok(())
     }
 
     fn status(&self) -> ServiceStatus {
         let now = now_unix().unwrap_or(0);
+        let has_active = self.active_sessions.iter().any(|s| s.is_active_at(now));
+        
         let state = if self.tampered_state {
             ServiceState::Tampered
-        } else if self
-            .active
-            .as_ref()
-            .map(|session| session.is_active_at(now))
-            .unwrap_or(false)
-        {
+        } else if has_active {
             ServiceState::Active
-        } else if self.active.is_some() {
+        } else if !self.active_sessions.is_empty() {
             ServiceState::ExpiredNeedsRecovery
         } else {
             ServiceState::Idle
@@ -314,7 +312,7 @@ impl Engine {
         ServiceStatus {
             state,
             now,
-            active_session: self.active.clone(),
+            active_sessions: self.active_sessions.clone(),
             tampered_state: self.tampered_state,
         }
     }

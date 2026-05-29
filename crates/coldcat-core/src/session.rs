@@ -9,6 +9,7 @@ use crate::{ColdCatError, Result};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActiveSession {
     pub id: String,
+    pub name: String,
     pub started_at: u64,
     pub end_time: u64,
     pub sites: Vec<String>,
@@ -17,6 +18,7 @@ pub struct ActiveSession {
 
 impl ActiveSession {
     pub fn new(
+        name: String,
         duration_secs: u64,
         sites: Vec<String>,
         apps: Vec<String>,
@@ -36,6 +38,7 @@ impl ActiveSession {
 
         Ok(Self {
             id: Uuid::new_v4().to_string(),
+            name,
             started_at: now,
             end_time,
             sites,
@@ -129,6 +132,6 @@ mod tests {
 
     #[test]
     fn rejects_empty_session() {
-        assert!(ActiveSession::new(10, vec![], vec![], 100).is_err());
+        assert!(ActiveSession::new("Test".to_string(), 10, vec![], vec![], 100).is_err());
     }
 }

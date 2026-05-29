@@ -45,6 +45,7 @@ fn main() -> Result<()> {
             apps,
         } => {
             let response = send_command(CommandRequest::Start {
+                name: "CLI Block".to_string(),
                 duration_secs: duration,
                 sites,
                 apps,
@@ -80,16 +81,24 @@ fn print_response(response: &CommandResponse) {
     if let Some(status) = &response.status {
         println!("state: {:?}", status.state);
         println!("now: {}", status.now);
-        if let Some(session) = &status.active_session {
-            println!("session: {}", session.id);
-            println!("started_at: {}", session.started_at);
-            println!("end_time: {}", session.end_time);
-            if !session.sites.is_empty() {
-                println!("sites: {}", session.sites.join(","));
+        if !status.active_sessions.is_empty() {
+            println!("Active blocks:");
+            for session in &status.active_sessions {
+                let total = session.end_time.saturating_sub(session.started_at);
+                let remaining = session.end_time.saturating_sub(status.now);
+                println!(
+                    "  - '{}' ends in {}s (total {}s)",
+                    session.name, remaining, total
+                );
+                if !session.sites.is_empty() {
+                    println!("    Sites: {}", session.sites.join(", "));
+                }
+                if !session.apps.is_empty() {
+                    println!("    Apps:  {}", session.apps.join(", "));
+                }
             }
-            if !session.apps.is_empty() {
-                println!("apps: {}", session.apps.join(","));
-            }
+        } else {
+            println!("No active sessions.");
         }
         if matches!(status.state, ServiceState::Tampered) || status.tampered_state {
             println!("tampered_state: true");

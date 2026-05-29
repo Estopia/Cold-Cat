@@ -503,21 +503,10 @@ impl ColdCatApp {
                     }
                 });
 
-                if let Some(session) = &status.active_session {
-                    let total = session.end_time.saturating_sub(session.started_at).max(1);
-                    let elapsed = now.saturating_sub(session.started_at).min(total);
-                    let progress = elapsed as f32 / total as f32;
+                if !status.active_sessions.is_empty() {
+                    let total_blocks = status.active_sessions.len();
                     ui.add_space(8.0);
-                    ui.add(
-                        egui::ProgressBar::new(progress)
-                            .desired_width(ui.available_width())
-                            .text(remaining_label(now, session.end_time)),
-                    );
-                    ui.add_space(8.0);
-                    ui.label(format!("Started: {}", session.started_at));
-                    ui.label(format!("Ends: {}", session.end_time));
-                    ui.label(format!("Blocked sites: {}", session.sites.len()));
-                    ui.label(format!("Blocked apps: {}", session.apps.len()));
+                    ui.label(format!("{} active blocks.", total_blocks));
                 } else {
                     ui.add_space(8.0);
                     ui.label("No active session.");
@@ -958,6 +947,7 @@ impl ColdCatApp {
 
         self.apply_response(
             send_command(CommandRequest::Start {
+                name: self.draft_name.clone(),
                 duration_secs,
                 sites,
                 apps,
@@ -1111,7 +1101,7 @@ impl ColdCatApp {
             self.last_action = "Load active failed".to_string();
             return;
         };
-        let Some(session) = &status.active_session else {
+        let Some(session) = status.active_sessions.first() else {
             self.error = Some("There is no active session to copy.".to_string());
             self.last_action = "Load active failed".to_string();
             return;

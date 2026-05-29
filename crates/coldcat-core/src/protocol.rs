@@ -6,6 +6,7 @@ use crate::session::ActiveSession;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandRequest {
     Start {
+        name: String,
         duration_secs: u64,
         sites: Vec<String>,
         apps: Vec<String>,
@@ -43,7 +44,7 @@ impl CommandResponse {
 pub struct ServiceStatus {
     pub state: ServiceState,
     pub now: u64,
-    pub active_session: Option<ActiveSession>,
+    pub active_sessions: Vec<ActiveSession>,
     pub tampered_state: bool,
 }
 

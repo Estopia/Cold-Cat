@@ -179,7 +179,7 @@ impl StateStore {
         Ok(Self { paths, key })
     }
 
-    pub fn load(&self) -> Result<Option<ActiveSession>> {
+    pub fn load(&self) -> Result<Option<Vec<ActiveSession>>> {
         match self.load_from(&self.paths.state_file) {
             Ok(session @ Some(_)) => Ok(session),
             Ok(None) => {
@@ -202,10 +202,10 @@ impl StateStore {
         }
     }
 
-    pub fn save(&self, session: &ActiveSession) -> Result<()> {
+    pub fn save(&self, sessions: &[ActiveSession]) -> Result<()> {
         set_file_hardened(&self.paths.state_file, false)?;
         set_file_hardened(&self.paths.state_backup_file, false)?;
-        let sealed = seal_session(session, &self.key)
+        let sealed = seal_session(sessions, &self.key)
             .map_err(|err| anyhow!("failed to seal session: {err}"))?;
         let rendered = serde_json::to_string_pretty(&sealed)?;
         write_text(&self.paths.state_file, &rendered)?;
@@ -231,19 +231,19 @@ impl StateStore {
         Ok(())
     }
 
-    fn load_from(&self, path: &Path) -> Result<Option<ActiveSession>> {
+    fn load_from(&self, path: &Path) -> Result<Option<Vec<ActiveSession>>> {
         if !path.exists() {
             return Ok(None);
         }
         let sealed: SealedSession = serde_json::from_str(&fs::read_to_string(path)?)
             .with_context(|| format!("reading sealed state from {}", path.display()))?;
-        let session = open_session(&sealed, &self.key).map_err(|err| {
+        let sessions = open_session(&sealed, &self.key).map_err(|err| {
             anyhow!(
                 "sealed session validation failed for {}: {err}",
                 path.display()
             )
         })?;
-        Ok(Some(session))
+        Ok(Some(sessions))
     }
 }
 
