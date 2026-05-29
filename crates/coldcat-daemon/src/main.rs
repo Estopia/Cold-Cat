@@ -25,7 +25,11 @@ enum Command {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    match args.command.unwrap_or(Command::Run) {
+    run_command(args.command.unwrap_or(Command::Run))
+}
+
+fn run_command(command: Command) -> Result<()> {
+    match command {
         Command::Run => engine::run_console(),
         #[cfg(windows)]
         Command::Service => win_service::run(),

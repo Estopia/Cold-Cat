@@ -1,9 +1,11 @@
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
+
+#[cfg(windows)]
+use std::env;
 
 use anyhow::{anyhow, bail, Context, Result};
 use coldcat_core::apps::{process_matches_rule, ProcessRecord};
