@@ -2,6 +2,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use coldcat_core::apps::{process_matches_rule, ProcessRecord};
@@ -18,6 +20,7 @@ pub struct PlatformPaths {
     pub config_dir: PathBuf,
     pub runtime_dir: PathBuf,
     pub state_file: PathBuf,
+    pub state_backup_file: PathBuf,
     pub key_file: PathBuf,
     pub hosts_file: PathBuf,
 }
@@ -28,6 +31,7 @@ impl PlatformPaths {
         let config_dir = default_config_dir();
         let runtime_dir = default_runtime_dir(&data_dir);
         let state_file = data_dir.join("state").join("session.json.sealed");
+        let state_backup_file = data_dir.join("state").join("session.json.sealed.bak");
         let key_file = config_dir.join("state.key");
         let hosts_file = default_hosts_file();
 
@@ -36,6 +40,7 @@ impl PlatformPaths {
             config_dir,
             runtime_dir,
             state_file,
+            state_backup_file,
             key_file,
             hosts_file,
         }
@@ -107,6 +112,7 @@ impl SystemEnforcer {
         system.refresh_processes();
         let current_pid = sysinfo::get_current_pid().ok();
         let mut killed = 0_usize;
+        let mut term_sent = Vec::new();
 
         for (pid, process) in system.processes() {
             if current_pid.as_ref() == Some(pid) {
@@ -119,9 +125,21 @@ impl SystemEnforcer {
             };
 
             if apps.iter().any(|rule| process_matches_rule(rule, &record)) {
-                let term_sent = process.kill_with(Signal::Term).unwrap_or(false);
-                if term_sent || process.kill() {
+                if process.kill_with(Signal::Term).unwrap_or(false) {
                     killed += 1;
+                    term_sent.push(*pid);
+                } else if process.kill() {
+                    killed += 1;
+                }
+            }
+        }
+
+        if !term_sent.is_empty() {
+            thread::sleep(Duration::from_millis(250));
+            system.refresh_processes();
+            for pid in term_sent {
+                if let Some(process) = system.process(pid) {
+                    let _ = process.kill();
                 }
             }
         }
@@ -160,34 +178,70 @@ impl StateStore {
     }
 
     pub fn load(&self) -> Result<Option<ActiveSession>> {
-        if !self.paths.state_file.exists() {
-            return Ok(None);
+        match self.load_from(&self.paths.state_file) {
+            Ok(session @ Some(_)) => Ok(session),
+            Ok(None) => {
+                let backup = self.load_from(&self.paths.state_backup_file)?;
+                if let Some(session) = &backup {
+                    self.save(session)?;
+                }
+                Ok(backup)
+            }
+            Err(primary_err) => match self.load_from(&self.paths.state_backup_file) {
+                Ok(Some(session)) => {
+                    self.save(&session)?;
+                    Ok(Some(session))
+                }
+                Ok(None) => Err(primary_err),
+                Err(backup_err) => Err(anyhow!(
+                    "primary and backup sealed state validation failed; primary: {primary_err:#}; backup: {backup_err:#}"
+                )),
+            },
         }
-        let sealed: SealedSession =
-            serde_json::from_str(&fs::read_to_string(&self.paths.state_file)?)?;
-        let session = open_session(&sealed, &self.key)
-            .map_err(|err| anyhow!("sealed session validation failed: {err}"))?;
-        Ok(Some(session))
     }
 
     pub fn save(&self, session: &ActiveSession) -> Result<()> {
         set_file_hardened(&self.paths.state_file, false)?;
+        set_file_hardened(&self.paths.state_backup_file, false)?;
         let sealed = seal_session(session, &self.key)
             .map_err(|err| anyhow!("failed to seal session: {err}"))?;
         let rendered = serde_json::to_string_pretty(&sealed)?;
         write_text(&self.paths.state_file, &rendered)?;
+        write_text(&self.paths.state_backup_file, &rendered)?;
         restrict_private_path(&self.paths.state_file, false)?;
+        restrict_private_path(&self.paths.state_backup_file, false)?;
         set_file_hardened(&self.paths.state_file, true)?;
+        set_file_hardened(&self.paths.state_backup_file, true)?;
         Ok(())
     }
 
     pub fn clear(&self) -> Result<()> {
         set_file_hardened(&self.paths.state_file, false)?;
+        set_file_hardened(&self.paths.state_backup_file, false)?;
         if self.paths.state_file.exists() {
             fs::remove_file(&self.paths.state_file)
                 .with_context(|| format!("removing {}", self.paths.state_file.display()))?;
         }
+        if self.paths.state_backup_file.exists() {
+            fs::remove_file(&self.paths.state_backup_file)
+                .with_context(|| format!("removing {}", self.paths.state_backup_file.display()))?;
+        }
         Ok(())
+    }
+
+    fn load_from(&self, path: &Path) -> Result<Option<ActiveSession>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let sealed: SealedSession = serde_json::from_str(&fs::read_to_string(path)?)
+            .with_context(|| format!("reading sealed state from {}", path.display()))?;
+        let session = open_session(&sealed, &self.key).map_err(|err| {
+            anyhow!(
+                "sealed session validation failed for {}: {err}",
+                path.display()
+            )
+        })?;
+        Ok(Some(session))
     }
 }
 

@@ -2,7 +2,7 @@
 
 Cold Cat is a native, cross-platform website and application blocker. The project is Windows-first in this workspace, with Linux support kept behind platform-specific backends for later native Ubuntu validation.
 
-The enforcement model is owner-controlled: Cold Cat resists casual bypass by using a privileged background service, signed active state, restrictive file permissions, hosts-file hardening, and daemon-side refusal to clear active sessions before expiry. It does not use stealth techniques or claim to defeat a determined administrator/root user with recovery access.
+The enforcement model is owner-controlled: Cold Cat resists casual bypass by using a privileged background service, duplicated signed active state, restrictive file permissions, hosts-file hardening, and daemon-side refusal to clear active sessions before expiry. It does not use stealth techniques or claim to defeat a determined administrator/root user with recovery access.
 
 ## Language choice
 
@@ -31,7 +31,7 @@ cargo build --release
 .\packaging\windows\install-service.ps1
 ```
 
-The service stores privileged state under `%ProgramData%\ColdCat`, listens on `127.0.0.1:47842`, and configures Windows service recovery to restart the daemon if it crashes.
+The service stores privileged state under `%ProgramData%\ColdCat`, keeps a signed backup copy of active session state, listens on `127.0.0.1:47842`, and configures Windows service recovery to restart the daemon if it crashes.
 
 Start a blocking session:
 
@@ -73,4 +73,3 @@ Linux website blocking writes a managed section to `/etc/hosts` and applies `cha
 Normal `coldcat recover` is refused until the active end timestamp has passed. If administrator/root recovery is required after expiry or because of a failed service restore, stop the service, remove read-only/immutable flags from the managed files, remove only the `# BEGIN COLD-CAT-BLOCK` to `# END COLD-CAT-BLOCK` section from the hosts file, and then restart the service.
 
 This recovery path is intentional. Cold Cat is designed to discourage casual circumvention, not to behave like malware or permanently lock the owner out of their machine.
-

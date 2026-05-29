@@ -131,6 +131,7 @@ fn doctor() -> Result<()> {
     println!("config_dir: {}", paths.config_dir.display());
     println!("runtime_dir: {}", paths.runtime_dir.display());
     println!("state_file: {}", paths.state_file.display());
+    println!("state_backup_file: {}", paths.state_backup_file.display());
     println!("key_file: {}", paths.key_file.display());
     println!("hosts_file: {}", paths.hosts_file.display());
 
