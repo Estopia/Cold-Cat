@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use coldcat_core::client::send_command;
@@ -201,7 +203,6 @@ fn built_in_profiles() -> Vec<BlockProfile> {
     ]
 }
 
-#[derive(Debug)]
 struct ColdCatApp {
     page: Page,
     duration: String,
@@ -215,6 +216,7 @@ struct ColdCatApp {
     app_filter: String,
     app_candidates: Vec<AppCandidate>,
     last_app_scan: Option<Instant>,
+    installed_app_scan: Option<InstalledAppScan>,
     status: Option<ServiceStatus>,
     status_fetched_at: Option<Instant>,
     auto_refresh: bool,
@@ -222,6 +224,11 @@ struct ColdCatApp {
     message: String,
     error: Option<String>,
     last_action: String,
+}
+
+struct InstalledAppScan {
+    receiver: Receiver<Vec<AppCandidate>>,
+    started_at: Instant,
 }
 
 impl Default for ColdCatApp {
@@ -239,6 +246,7 @@ impl Default for ColdCatApp {
             app_filter: String::new(),
             app_candidates: Vec::new(),
             last_app_scan: None,
+            installed_app_scan: None,
             status: None,
             status_fetched_at: None,
             auto_refresh: false,
@@ -254,6 +262,7 @@ impl Default for ColdCatApp {
 
 impl eframe::App for ColdCatApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_installed_app_scan(ctx);
         self.maybe_auto_refresh();
 
         egui::SidePanel::left("coldcat_sidebar")
@@ -758,7 +767,20 @@ impl ColdCatApp {
                 if secondary_button(ui, "Scan running apps", 150.0, 34.0).clicked() {
                     self.scan_apps();
                 }
-                if secondary_button(ui, "Scan installed apps", 150.0, 34.0).clicked() {
+                let scanning_installed = self.installed_app_scan.is_some();
+                if secondary_button_enabled(
+                    ui,
+                    if scanning_installed {
+                        "Scanning..."
+                    } else {
+                        "Scan installed apps"
+                    },
+                    150.0,
+                    34.0,
+                    !scanning_installed,
+                )
+                .clicked()
+                {
                     self.scan_installed_apps();
                 }
                 if let Some(scan) = self.last_app_scan {
@@ -790,32 +812,43 @@ impl ColdCatApp {
         if ui.available_width() >= 900.0 {
             ui.columns(2, |columns| {
                 card(&mut columns[0], |ui| self.running_apps_card(ui));
-                card(&mut columns[1], |ui| self.app_editor(ui));
+                card(&mut columns[1], |ui| self.app_editor_for_apps_page(ui));
             });
         } else {
             card(ui, |ui| self.running_apps_card(ui));
             ui.add_space(12.0);
-            card(ui, |ui| self.app_editor(ui));
+            card(ui, |ui| self.app_editor_for_apps_page(ui));
         }
     }
 
     fn running_apps_card(&mut self, ui: &mut egui::Ui) {
         ui.heading("Discovered apps");
         ui.add_space(8.0);
-        egui::ScrollArea::vertical()
-            .max_height(430.0)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for candidate in self.filtered_candidates() {
-                    let already_selected = self
-                        .app_rules
-                        .iter()
-                        .any(|rule| rule.eq_ignore_ascii_case(&candidate.rule));
-                    app_candidate_row(ui, &candidate, already_selected, |rule| {
-                        add_unique_rule(&mut self.app_rules, rule);
-                    });
-                }
-            });
+        let candidates = self.filtered_candidates();
+        if candidates.is_empty() {
+            ui.label(RichText::new("No apps match the current search.").color(MUTED));
+            return;
+        }
+
+        ui.label(
+            RichText::new(format!("Showing {} discovered apps.", candidates.len()))
+                .small()
+                .color(MUTED),
+        );
+        ui.add_space(6.0);
+
+        for candidate in candidates {
+            let already_selected = self
+                .app_rules
+                .iter()
+                .any(|rule| rule.eq_ignore_ascii_case(&candidate.rule));
+            if app_candidate_row(ui, &candidate, already_selected) {
+                add_unique_rule(&mut self.app_rules, candidate.rule.clone());
+                self.message = format!("Added '{}' to selected apps.", candidate.rule);
+                self.error = None;
+                self.last_action = "Added app".to_string();
+            }
+        }
     }
 
     fn sites_page(&mut self, ui: &mut egui::Ui) {
@@ -900,8 +933,12 @@ impl ColdCatApp {
     fn site_editor(&mut self, ui: &mut egui::Ui) {
         ui.heading("Selected websites");
         ui.horizontal(|ui| {
-            ui.text_edit_singleline(&mut self.manual_site);
-            if secondary_button(ui, "Add site", 96.0, 30.0).clicked() {
+            let input_width = (ui.available_width() - 108.0).max(140.0);
+            let input = ui
+                .add(egui::TextEdit::singleline(&mut self.manual_site).desired_width(input_width));
+            let submitted =
+                input.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            if secondary_button(ui, "Add site", 96.0, 30.0).clicked() || submitted {
                 self.add_manual_sites();
             }
         });
@@ -910,15 +947,31 @@ impl ColdCatApp {
     }
 
     fn app_editor(&mut self, ui: &mut egui::Ui) {
+        self.app_editor_contents(ui, true);
+    }
+
+    fn app_editor_for_apps_page(&mut self, ui: &mut egui::Ui) {
+        self.app_editor_contents(ui, false);
+    }
+
+    fn app_editor_contents(&mut self, ui: &mut egui::Ui, nested_scroll: bool) {
         ui.heading("Selected apps");
         ui.horizontal(|ui| {
-            ui.text_edit_singleline(&mut self.manual_app);
-            if secondary_button(ui, "Add app", 96.0, 30.0).clicked() {
+            let input_width = (ui.available_width() - 108.0).max(140.0);
+            let input =
+                ui.add(egui::TextEdit::singleline(&mut self.manual_app).desired_width(input_width));
+            let submitted =
+                input.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            if secondary_button(ui, "Add app", 96.0, 30.0).clicked() || submitted {
                 self.add_manual_apps();
             }
         });
         ui.add_space(8.0);
-        removable_rules(ui, &mut self.app_rules);
+        if nested_scroll {
+            removable_rules(ui, &mut self.app_rules);
+        } else {
+            removable_rules_expanded(ui, &mut self.app_rules);
+        }
     }
 
     fn message_strip(&self, ui: &mut egui::Ui) {
@@ -1024,10 +1077,29 @@ impl ColdCatApp {
     }
 
     fn add_manual_apps(&mut self) {
-        for app in parse_rule_text(&self.manual_app) {
+        let apps = parse_rule_text(&self.manual_app);
+        if apps.is_empty() {
+            self.error =
+                Some("Enter an executable name, process name, or full path first.".to_string());
+            self.last_action = "Add app failed".to_string();
+            return;
+        }
+
+        let before = self.app_rules.len();
+        for app in apps {
             add_unique_rule(&mut self.app_rules, app);
         }
         self.manual_app.clear();
+        let added = self.app_rules.len().saturating_sub(before);
+        self.error = None;
+        self.message = if added == 0 {
+            "That app is already selected.".to_string()
+        } else if added == 1 {
+            "Added 1 app to the draft.".to_string()
+        } else {
+            format!("Added {added} apps to the draft.")
+        };
+        self.last_action = "Added app".to_string();
     }
 
     fn apply_profile(&mut self, profile: &BlockProfile) {
@@ -1140,11 +1212,67 @@ impl ColdCatApp {
     fn scan_apps(&mut self) {
         self.app_candidates = scan_running_apps();
         self.last_app_scan = Some(Instant::now());
+        self.message = format!("Found {} running apps.", self.app_candidates.len());
+        self.error = None;
+        self.last_action = "Scanned running apps".to_string();
     }
 
     fn scan_installed_apps(&mut self) {
-        merge_candidates(&mut self.app_candidates, scan_installed_apps());
-        self.last_app_scan = Some(Instant::now());
+        if self.installed_app_scan.is_some() {
+            self.message = "Installed app scan is already running.".to_string();
+            self.error = None;
+            self.last_action = "Scan already running".to_string();
+            return;
+        }
+
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = sender.send(scan_installed_app_candidates());
+        });
+        self.installed_app_scan = Some(InstalledAppScan {
+            receiver,
+            started_at: Instant::now(),
+        });
+        self.message = "Scanning installed apps in the background.".to_string();
+        self.error = None;
+        self.last_action = "Scanning installed apps".to_string();
+    }
+
+    fn poll_installed_app_scan(&mut self, ctx: &egui::Context) {
+        let Some((result, elapsed)) = self
+            .installed_app_scan
+            .as_ref()
+            .map(|scan| (scan.receiver.try_recv(), scan.started_at.elapsed()))
+        else {
+            return;
+        };
+
+        match result {
+            Ok(candidates) => {
+                let count = candidates.len();
+                merge_candidates(&mut self.app_candidates, candidates);
+                self.installed_app_scan = None;
+                self.last_app_scan = Some(Instant::now());
+                self.message = format!("Found {count} installed apps.");
+                self.error = None;
+                self.last_action = "Scanned installed apps".to_string();
+            }
+            Err(TryRecvError::Empty) => {
+                if elapsed >= Duration::from_secs(1) {
+                    self.message = format!(
+                        "Scanning installed apps in the background ({}s)...",
+                        elapsed.as_secs()
+                    );
+                    self.error = None;
+                }
+                ctx.request_repaint_after(Duration::from_millis(250));
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.installed_app_scan = None;
+                self.error = Some("Installed app scan stopped unexpectedly.".to_string());
+                self.last_action = "Scan failed".to_string();
+            }
+        }
     }
 
     fn filtered_candidates(&self) -> Vec<AppCandidate> {
@@ -1361,13 +1489,29 @@ fn primary_button(ui: &mut egui::Ui, label: &str, width: f32, height: f32) -> eg
 }
 
 fn secondary_button(ui: &mut egui::Ui, label: &str, width: f32, height: f32) -> egui::Response {
-    ui.add(
-        egui::Button::new(RichText::new(label).strong().color(TEXT))
-            .fill(Color32::from_rgb(248, 250, 252))
-            .stroke(Stroke::new(1.0, BORDER))
-            .rounding(8.0)
-            .min_size(egui::vec2(width, height)),
+    secondary_button_enabled(ui, label, width, height, true)
+}
+
+fn secondary_button_enabled(
+    ui: &mut egui::Ui,
+    label: &str,
+    width: f32,
+    height: f32,
+    enabled: bool,
+) -> egui::Response {
+    ui.add_enabled(
+        enabled,
+        egui::Button::new(
+            RichText::new(label)
+                .strong()
+                .color(if enabled { TEXT } else { MUTED }),
+        )
+        .fill(Color32::from_rgb(248, 250, 252))
+        .stroke(Stroke::new(1.0, BORDER))
+        .rounding(8.0)
+        .min_size(egui::vec2(width, height)),
     )
+    .on_disabled_hover_text("Scan already running")
 }
 
 fn danger_button(ui: &mut egui::Ui, label: &str, width: f32, height: f32) -> egui::Response {
@@ -1432,57 +1576,72 @@ fn removable_rules(ui: &mut egui::Ui, rules: &mut Vec<String>) {
         return;
     }
 
+    removable_rules_list(ui, rules, true);
+}
+
+fn removable_rules_expanded(ui: &mut egui::Ui, rules: &mut Vec<String>) {
+    if rules.is_empty() {
+        ui.label(RichText::new("Nothing selected yet.").color(MUTED));
+        return;
+    }
+
+    removable_rules_list(ui, rules, false);
+}
+
+fn removable_rules_list(ui: &mut egui::Ui, rules: &mut Vec<String>, nested_scroll: bool) {
     let mut remove = None;
-    egui::ScrollArea::vertical()
-        .max_height(260.0)
-        .show(ui, |ui| {
-            for (index, rule) in rules.iter().enumerate() {
-                egui::Frame::default()
-                    .fill(CARD_ALT)
-                    .rounding(10.0)
-                    .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(rule);
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                RichText::new("Remove").color(ERROR).strong(),
-                                            )
-                                            .fill(Color32::from_rgb(255, 251, 250))
-                                            .stroke(Stroke::new(
-                                                1.0,
-                                                Color32::from_rgb(253, 162, 155),
-                                            ))
-                                            .rounding(7.0)
-                                            .min_size(egui::vec2(74.0, 26.0)),
-                                        )
-                                        .clicked()
-                                    {
-                                        remove = Some(index);
-                                    }
-                                },
-                            );
-                        });
-                    });
-                ui.add_space(4.0);
+    let mut show_rows = |ui: &mut egui::Ui| {
+        for (index, rule) in rules.iter().enumerate() {
+            if removable_rule_row(ui, rule) {
+                remove = Some(index);
             }
-        });
+            ui.add_space(4.0);
+        }
+    };
+
+    if nested_scroll {
+        egui::ScrollArea::vertical()
+            .max_height(260.0)
+            .show(ui, |ui| show_rows(ui));
+    } else {
+        show_rows(ui);
+    }
 
     if let Some(index) = remove {
         rules.remove(index);
     }
 }
 
-fn app_candidate_row(
-    ui: &mut egui::Ui,
-    candidate: &AppCandidate,
-    already_selected: bool,
-    mut add: impl FnMut(String),
-) {
+fn removable_rule_row(ui: &mut egui::Ui, rule: &str) -> bool {
+    let mut remove = false;
+    egui::Frame::default()
+        .fill(CARD_ALT)
+        .rounding(10.0)
+        .inner_margin(egui::Margin::symmetric(10.0, 7.0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add(egui::Label::new(rule).wrap());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("Remove").color(ERROR).strong())
+                                .fill(Color32::from_rgb(255, 251, 250))
+                                .stroke(Stroke::new(1.0, Color32::from_rgb(253, 162, 155)))
+                                .rounding(7.0)
+                                .min_size(egui::vec2(74.0, 26.0)),
+                        )
+                        .clicked()
+                    {
+                        remove = true;
+                    }
+                });
+            });
+        });
+    remove
+}
+
+fn app_candidate_row(ui: &mut egui::Ui, candidate: &AppCandidate, already_selected: bool) -> bool {
+    let mut add_clicked = false;
     egui::Frame::default()
         .fill(if already_selected { PANEL } else { CARD_ALT })
         .rounding(10.0)
@@ -1500,12 +1659,13 @@ fn app_candidate_row(
                     if already_selected {
                         ui.label(RichText::new("Added").color(OK));
                     } else if secondary_button(ui, "Add", 62.0, 30.0).clicked() {
-                        add(candidate.rule.clone());
+                        add_clicked = true;
                     }
                 });
             });
         });
     ui.add_space(6.0);
+    add_clicked
 }
 
 fn category_card(ui: &mut egui::Ui, category: &SiteCategory) -> bool {
@@ -1674,7 +1834,7 @@ fn scan_running_apps() -> Vec<AppCandidate> {
     by_rule.into_values().collect()
 }
 
-fn scan_installed_apps() -> Vec<AppCandidate> {
+fn scan_installed_app_candidates() -> Vec<AppCandidate> {
     scan_platform_installed_apps()
 }
 
