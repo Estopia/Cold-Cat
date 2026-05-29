@@ -68,6 +68,7 @@ This creates `dist\ColdCatSetup.exe`. Run it as Administrator to install or upda
 - installs or updates `coldcat.exe`, `coldcat-daemon.exe`, and `coldcat-gui.exe`
 - installs to `%ProgramFiles%\Cold Cat` by default
 - stops and replaces an existing daemon service during updates
+- repairs `%ProgramData%\ColdCat` ACLs so the LocalSystem daemon can update sealed state while normal users cannot edit it
 - configures the daemon as an automatic Windows service
 - configures service recovery so the daemon restarts on failure
 - adds **Cold Cat** to the Windows Start Menu

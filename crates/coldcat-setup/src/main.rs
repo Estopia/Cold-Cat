@@ -49,6 +49,7 @@ fn install_or_update(install_dir: Option<PathBuf>, no_start: bool) -> Result<()>
         .with_context(|| format!("creating {}", install_dir.display()))?;
 
     stop_and_remove_service()?;
+    repair_program_data_acl()?;
 
     for binary in BINARIES {
         install_binary(binary, &install_dir)?;
@@ -109,6 +110,70 @@ fn side_by_side_binary(binary: &str) -> Result<PathBuf> {
             source.display()
         )
     }
+}
+
+fn repair_program_data_acl() -> Result<()> {
+    let data_dir = default_data_dir();
+    let state_dir = data_dir.join("state");
+    let config_dir = data_dir.join("config");
+    let runtime_dir = data_dir.join("run");
+
+    for dir in [&data_dir, &state_dir, &config_dir, &runtime_dir] {
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        harden_directory_acl(dir)?;
+    }
+
+    for file in [
+        state_dir.join("session.json.sealed"),
+        state_dir.join("session.json.sealed.bak"),
+        config_dir.join("state.key"),
+    ] {
+        if file.try_exists().unwrap_or(true) {
+            harden_file_acl(&file)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn harden_directory_acl(path: &Path) -> Result<()> {
+    let path = path.to_string_lossy().into_owned();
+    run_command(
+        "icacls.exe",
+        &[
+            path.as_str(),
+            "/inheritance:r",
+            "/grant:r",
+            "*S-1-5-18:(OI)(CI)F",
+            "*S-1-5-32-544:(OI)(CI)F",
+            "/remove:g",
+            "*S-1-5-11",
+            "*S-1-5-32-545",
+            "*S-1-1-0",
+        ],
+        true,
+    )
+    .with_context(|| format!("repairing ACL on {path}"))
+}
+
+fn harden_file_acl(path: &Path) -> Result<()> {
+    let path = path.to_string_lossy().into_owned();
+    run_command(
+        "icacls.exe",
+        &[
+            path.as_str(),
+            "/inheritance:r",
+            "/grant:r",
+            "*S-1-5-18:F",
+            "*S-1-5-32-544:F",
+            "/remove:g",
+            "*S-1-5-11",
+            "*S-1-5-32-545",
+            "*S-1-1-0",
+        ],
+        true,
+    )
+    .with_context(|| format!("repairing ACL on {path}"))
 }
 
 fn create_service(install_dir: &Path) -> Result<()> {
@@ -262,6 +327,13 @@ fn default_install_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"))
         .join("Cold Cat")
+}
+
+fn default_data_dir() -> PathBuf {
+    env::var_os("PROGRAMDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+        .join("ColdCat")
 }
 
 fn escape_powershell_single_quoted(value: &str) -> String {

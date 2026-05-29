@@ -21,6 +21,7 @@ pub struct PlatformPaths {
     pub data_dir: PathBuf,
     pub config_dir: PathBuf,
     pub runtime_dir: PathBuf,
+    pub state_dir: PathBuf,
     pub state_file: PathBuf,
     pub state_backup_file: PathBuf,
     pub key_file: PathBuf,
@@ -32,8 +33,9 @@ impl PlatformPaths {
         let data_dir = default_data_dir();
         let config_dir = default_config_dir();
         let runtime_dir = default_runtime_dir(&data_dir);
-        let state_file = data_dir.join("state").join("session.json.sealed");
-        let state_backup_file = data_dir.join("state").join("session.json.sealed.bak");
+        let state_dir = data_dir.join("state");
+        let state_file = state_dir.join("session.json.sealed");
+        let state_backup_file = state_dir.join("session.json.sealed.bak");
         let key_file = config_dir.join("state.key");
         let hosts_file = default_hosts_file();
 
@@ -41,6 +43,7 @@ impl PlatformPaths {
             data_dir,
             config_dir,
             runtime_dir,
+            state_dir,
             state_file,
             state_backup_file,
             key_file,
@@ -68,14 +71,16 @@ impl SystemEnforcer {
     }
 
     pub fn ensure_layout(&self) -> Result<()> {
-        fs::create_dir_all(self.paths.data_dir.join("state"))
-            .with_context(|| format!("creating {}", self.paths.data_dir.join("state").display()))?;
+        fs::create_dir_all(&self.paths.state_dir)
+            .with_context(|| format!("creating {}", self.paths.state_dir.display()))?;
         fs::create_dir_all(&self.paths.config_dir)
             .with_context(|| format!("creating {}", self.paths.config_dir.display()))?;
         fs::create_dir_all(&self.paths.runtime_dir)
             .with_context(|| format!("creating {}", self.paths.runtime_dir.display()))?;
         restrict_private_path(&self.paths.data_dir, true)?;
+        restrict_private_path(&self.paths.state_dir, true)?;
         restrict_private_path(&self.paths.config_dir, true)?;
+        restrict_private_path(&self.paths.runtime_dir, true)?;
         Ok(())
     }
 
@@ -158,12 +163,16 @@ pub struct StateStore {
 
 impl StateStore {
     pub fn open(paths: PlatformPaths) -> Result<Self> {
-        fs::create_dir_all(paths.data_dir.join("state"))
-            .with_context(|| format!("creating {}", paths.data_dir.join("state").display()))?;
+        fs::create_dir_all(&paths.state_dir)
+            .with_context(|| format!("creating {}", paths.state_dir.display()))?;
         fs::create_dir_all(&paths.config_dir)
             .with_context(|| format!("creating {}", paths.config_dir.display()))?;
+        fs::create_dir_all(&paths.runtime_dir)
+            .with_context(|| format!("creating {}", paths.runtime_dir.display()))?;
         restrict_private_path(&paths.data_dir, true)?;
+        restrict_private_path(&paths.state_dir, true)?;
         restrict_private_path(&paths.config_dir, true)?;
+        restrict_private_path(&paths.runtime_dir, true)?;
 
         let key = if paths.key_file.exists() {
             decode_key(&fs::read_to_string(&paths.key_file)?)
@@ -205,6 +214,9 @@ impl StateStore {
     pub fn save(&self, sessions: &[ActiveSession]) -> Result<()> {
         set_file_hardened(&self.paths.state_file, false)?;
         set_file_hardened(&self.paths.state_backup_file, false)?;
+        restrict_private_path(&self.paths.state_dir, true)?;
+        restrict_private_path(&self.paths.state_file, false)?;
+        restrict_private_path(&self.paths.state_backup_file, false)?;
         let sealed = seal_session(sessions, &self.key)
             .map_err(|err| anyhow!("failed to seal session: {err}"))?;
         let rendered = serde_json::to_string_pretty(&sealed)?;
@@ -318,7 +330,7 @@ fn default_hosts_file() -> PathBuf {
 
 #[cfg(windows)]
 fn set_file_hardened(path: &Path, hardened: bool) -> Result<()> {
-    if !path.exists() {
+    if !path_should_be_hardened(path) {
         return Ok(());
     }
     let flag = if hardened { "+R" } else { "-R" };
@@ -334,16 +346,26 @@ fn set_file_hardened(path: &Path, hardened: bool) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn restrict_private_path(path: &Path, _directory: bool) -> Result<()> {
-    if !path.exists() {
+fn restrict_private_path(path: &Path, directory: bool) -> Result<()> {
+    if !path_should_be_hardened(path) {
         return Ok(());
     }
+    let system_rule = if directory {
+        "*S-1-5-18:(OI)(CI)F"
+    } else {
+        "*S-1-5-18:F"
+    };
+    let admins_rule = if directory {
+        "*S-1-5-32-544:(OI)(CI)F"
+    } else {
+        "*S-1-5-32-544:F"
+    };
     let status = Command::new("icacls")
         .arg(path)
         .arg("/inheritance:r")
         .arg("/grant:r")
-        .arg("*S-1-5-18:F")
-        .arg("*S-1-5-32-544:F")
+        .arg(system_rule)
+        .arg(admins_rule)
         .arg("/remove:g")
         .arg("*S-1-5-11")
         .arg("*S-1-5-32-545")
@@ -358,7 +380,7 @@ fn restrict_private_path(path: &Path, _directory: bool) -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn set_file_hardened(path: &Path, hardened: bool) -> Result<()> {
-    if !path.exists() {
+    if !path_should_be_hardened(path) {
         return Ok(());
     }
     let flag = if hardened { "+i" } else { "-i" };
@@ -377,7 +399,7 @@ fn set_file_hardened(path: &Path, hardened: bool) -> Result<()> {
 fn restrict_private_path(path: &Path, directory: bool) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    if !path.exists() {
+    if !path_should_be_hardened(path) {
         return Ok(());
     }
 
@@ -395,4 +417,8 @@ fn set_file_hardened(_path: &Path, _hardened: bool) -> Result<()> {
 #[cfg(all(not(windows), not(target_os = "linux")))]
 fn restrict_private_path(_path: &Path, _directory: bool) -> Result<()> {
     Ok(())
+}
+
+fn path_should_be_hardened(path: &Path) -> bool {
+    path.try_exists().unwrap_or(true)
 }
