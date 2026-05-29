@@ -67,6 +67,8 @@ impl SystemEnforcer {
             .with_context(|| format!("creating {}", self.paths.config_dir.display()))?;
         fs::create_dir_all(&self.paths.runtime_dir)
             .with_context(|| format!("creating {}", self.paths.runtime_dir.display()))?;
+        restrict_private_path(&self.paths.data_dir, true)?;
+        restrict_private_path(&self.paths.config_dir, true)?;
         Ok(())
     }
 
@@ -140,6 +142,8 @@ impl StateStore {
             .with_context(|| format!("creating {}", paths.data_dir.join("state").display()))?;
         fs::create_dir_all(&paths.config_dir)
             .with_context(|| format!("creating {}", paths.config_dir.display()))?;
+        restrict_private_path(&paths.data_dir, true)?;
+        restrict_private_path(&paths.config_dir, true)?;
 
         let key = if paths.key_file.exists() {
             decode_key(&fs::read_to_string(&paths.key_file)?)
@@ -147,6 +151,7 @@ impl StateStore {
         } else {
             let key = generate_key();
             write_text(&paths.key_file, &encode_key(&key))?;
+            restrict_private_path(&paths.key_file, false)?;
             set_file_hardened(&paths.key_file, true)?;
             key
         };
@@ -171,6 +176,7 @@ impl StateStore {
             .map_err(|err| anyhow!("failed to seal session: {err}"))?;
         let rendered = serde_json::to_string_pretty(&sealed)?;
         write_text(&self.paths.state_file, &rendered)?;
+        restrict_private_path(&self.paths.state_file, false)?;
         set_file_hardened(&self.paths.state_file, true)?;
         Ok(())
     }
@@ -271,6 +277,29 @@ fn set_file_hardened(path: &Path, hardened: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn restrict_private_path(path: &Path, _directory: bool) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let status = Command::new("icacls")
+        .arg(path)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg("*S-1-5-18:F")
+        .arg("*S-1-5-32-544:F")
+        .arg("/remove:g")
+        .arg("*S-1-5-11")
+        .arg("*S-1-5-32-545")
+        .arg("*S-1-1-0")
+        .status()
+        .with_context(|| format!("running icacls for {}", path.display()))?;
+    if !status.success() {
+        bail!("icacls hardening failed for {}", path.display());
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 fn set_file_hardened(path: &Path, hardened: bool) -> Result<()> {
     if !path.exists() {
@@ -288,7 +317,26 @@ fn set_file_hardened(path: &Path, hardened: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn restrict_private_path(path: &Path, directory: bool) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mode = if directory { 0o700 } else { 0o600 };
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .with_context(|| format!("setting mode {:o} on {}", mode, path.display()))?;
+    Ok(())
+}
+
 #[cfg(all(not(windows), not(target_os = "linux")))]
 fn set_file_hardened(_path: &Path, _hardened: bool) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(all(not(windows), not(target_os = "linux")))]
+fn restrict_private_path(_path: &Path, _directory: bool) -> Result<()> {
     Ok(())
 }

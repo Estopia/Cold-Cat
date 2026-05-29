@@ -1,0 +1,20 @@
+[Unit]
+Description=Cold Cat blocking daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/coldcat-daemon run
+User=root
+Restart=always
+RestartSec=1
+StartLimitIntervalSec=0
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc/hosts /etc/cold-cat /var/lib/cold-cat /run/cold-cat
+
+[Install]
+WantedBy=multi-user.target
+

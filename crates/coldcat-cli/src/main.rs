@@ -138,11 +138,49 @@ fn doctor() -> Result<()> {
         Ok(response) => {
             println!("daemon: reachable");
             print_response(&response);
-            Ok(())
         }
         Err(err) => {
             println!("daemon: unreachable ({err:#})");
-            Ok(())
         }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_start_command() {
+        let args = Args::try_parse_from([
+            "coldcat",
+            "start",
+            "--duration",
+            "2h",
+            "--sites",
+            "reddit.com,old.reddit.com",
+            "--apps",
+            "discord,steam",
+        ])
+        .unwrap();
+
+        match args.command {
+            Command::Start {
+                duration,
+                sites,
+                apps,
+            } => {
+                assert_eq!(duration, 7200);
+                assert_eq!(sites, vec!["reddit.com", "old.reddit.com"]);
+                assert_eq!(apps, vec!["discord", "steam"]);
+            }
+            _ => panic!("expected start command"),
+        }
+    }
+
+    #[test]
+    fn rejects_bad_duration() {
+        assert!(Args::try_parse_from(["coldcat", "start", "--duration", "soon"]).is_err());
     }
 }
