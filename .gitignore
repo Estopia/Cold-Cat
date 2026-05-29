@@ -1,0 +1,9 @@
+target/
+*.pdb
+*.exe
+*.log
+.env
+.vscode/
+.idea/
+*.tmp
+
