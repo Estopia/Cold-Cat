@@ -932,16 +932,9 @@ impl ColdCatApp {
 
     fn site_editor(&mut self, ui: &mut egui::Ui) {
         ui.heading("Selected websites");
-        ui.horizontal(|ui| {
-            let input_width = (ui.available_width() - 108.0).max(140.0);
-            let input = ui
-                .add(egui::TextEdit::singleline(&mut self.manual_site).desired_width(input_width));
-            let submitted =
-                input.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            if secondary_button(ui, "Add site", 96.0, 30.0).clicked() || submitted {
-                self.add_manual_sites();
-            }
-        });
+        if manual_rule_entry(ui, &mut self.manual_site, "Add site") {
+            self.add_manual_sites();
+        }
         ui.add_space(8.0);
         removable_rules(ui, &mut self.site_rules);
     }
@@ -956,16 +949,9 @@ impl ColdCatApp {
 
     fn app_editor_contents(&mut self, ui: &mut egui::Ui, nested_scroll: bool) {
         ui.heading("Selected apps");
-        ui.horizontal(|ui| {
-            let input_width = (ui.available_width() - 108.0).max(140.0);
-            let input =
-                ui.add(egui::TextEdit::singleline(&mut self.manual_app).desired_width(input_width));
-            let submitted =
-                input.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            if secondary_button(ui, "Add app", 96.0, 30.0).clicked() || submitted {
-                self.add_manual_apps();
-            }
-        });
+        if manual_rule_entry(ui, &mut self.manual_app, "Add app") {
+            self.add_manual_apps();
+        }
         ui.add_space(8.0);
         if nested_scroll {
             removable_rules(ui, &mut self.app_rules);
@@ -1522,6 +1508,36 @@ fn danger_button(ui: &mut egui::Ui, label: &str, width: f32, height: f32) -> egu
             .rounding(8.0)
             .min_size(egui::vec2(width, height)),
     )
+}
+
+fn manual_rule_entry(ui: &mut egui::Ui, value: &mut String, button_label: &str) -> bool {
+    let button_width = 96.0;
+    let button_height = 30.0;
+    let spacing = ui.spacing().item_spacing.x;
+    let available = ui.available_width();
+    let mut submitted = false;
+
+    if available >= 260.0 {
+        ui.horizontal(|ui| {
+            let input_width = (ui.available_width() - button_width - spacing).max(80.0);
+            let input = ui.add_sized(
+                [input_width, button_height],
+                egui::TextEdit::singleline(value),
+            );
+            submitted |=
+                input.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            submitted |= secondary_button(ui, button_label, button_width, button_height).clicked();
+        });
+    } else {
+        let input = ui.add_sized(
+            [ui.available_width(), button_height],
+            egui::TextEdit::singleline(value),
+        );
+        submitted |= input.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        submitted |= secondary_button(ui, button_label, button_width, button_height).clicked();
+    }
+
+    submitted
 }
 
 fn alert_box(
