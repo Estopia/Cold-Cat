@@ -5,6 +5,7 @@ members = [
     "crates/coldcat-daemon",
     "crates/coldcat-cli",
     "crates/coldcat-gui",
+    "crates/coldcat-setup",
 ]
 resolver = "2"
 

@@ -22,6 +22,7 @@ The main binaries are:
 - `target\release\coldcat.exe`
 - `target\release\coldcat-daemon.exe`
 - `target\release\coldcat-gui.exe`
+- `target\release\coldcat-setup.exe`
 
 ## Desktop GUI
 
@@ -48,7 +49,34 @@ After the daemon service is installed and running, launch:
 
 The GUI talks to the same daemon as the CLI over `127.0.0.1:47842`; it does not directly edit hosts files, kill processes, or alter sealed state.
 
-## Windows service setup
+## Windows setup/updater
+
+For a bundled one-file installer/updater, run:
+
+```powershell
+.\packaging\windows\build-setup.ps1
+```
+
+This creates `dist\ColdCatSetup.exe`. Run it as Administrator to install or update Cold Cat. The setup executable:
+
+- installs or updates `coldcat.exe`, `coldcat-daemon.exe`, and `coldcat-gui.exe`
+- installs to `%ProgramFiles%\Cold Cat` by default
+- stops and replaces an existing daemon service during updates
+- configures the daemon as an automatic Windows service
+- configures service recovery so the daemon restarts on failure
+- adds **Cold Cat** to the Windows Start Menu
+
+Optional setup arguments:
+
+```powershell
+.\dist\ColdCatSetup.exe --install-dir "C:\Tools\Cold Cat"
+.\dist\ColdCatSetup.exe --no-start
+.\dist\ColdCatSetup.exe --uninstall
+```
+
+`--uninstall` removes the service and Start Menu shortcut but leaves `%ProgramData%\ColdCat` state alone.
+
+## Manual Windows service setup
 
 Run PowerShell as Administrator:
 

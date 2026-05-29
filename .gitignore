@@ -1,4 +1,5 @@
 target/
+dist/
 *.pdb
 *.exe
 *.log
@@ -6,4 +7,3 @@ target/
 .vscode/
 .idea/
 *.tmp
-

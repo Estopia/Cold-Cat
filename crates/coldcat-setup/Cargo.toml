@@ -1,0 +1,16 @@
+[package]
+name = "coldcat-setup"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "coldcat-setup"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true

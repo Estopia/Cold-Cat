@@ -168,15 +168,32 @@ impl Default for ColdCatApp {
 
 impl eframe::App for ColdCatApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default()
-            .frame(egui::Frame::default().fill(BG))
+        egui::SidePanel::left("coldcat_sidebar")
+            .exact_width(280.0)
+            .frame(
+                egui::Frame::default()
+                    .fill(PANEL)
+                    .inner_margin(egui::Margin::same(18.0)),
+            )
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    self.sidebar(ui);
-                    ui.add_space(12.0);
-                    ui.vertical(|ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.sidebar(ui));
+            });
+
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::default()
+                    .fill(BG)
+                    .inner_margin(egui::Margin::same(18.0)),
+            )
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
                         self.header(ui);
-                        ui.add_space(12.0);
+                        ui.add_space(16.0);
                         match self.page {
                             Page::Dashboard => self.dashboard(ui),
                             Page::Builder => self.builder(ui),
@@ -185,38 +202,36 @@ impl eframe::App for ColdCatApp {
                             Page::Settings => self.settings(ui),
                         }
                     });
-                });
             });
     }
 }
 
 impl ColdCatApp {
     fn sidebar(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::default()
-            .fill(PANEL)
-            .rounding(18.0)
-            .inner_margin(egui::Margin::same(18.0))
-            .show(ui, |ui| {
-                ui.set_width(220.0);
-                ui.vertical_centered(|ui| {
-                    ui.heading(RichText::new("Cold Cat").size(28.0).color(ACCENT_2));
-                    ui.label(RichText::new("Enforced focus").color(MUTED));
-                });
-                ui.add_space(24.0);
+        ui.vertical_centered(|ui| {
+            ui.heading(RichText::new("Cold Cat").size(30.0).color(ACCENT_2));
+            ui.label(RichText::new("Enforced focus").color(MUTED));
+        });
+        ui.add_space(28.0);
 
-                self.nav_button(ui, Page::Dashboard, "Dashboard", "Current session");
-                self.nav_button(ui, Page::Builder, "Block Builder", "Start a session");
-                self.nav_button(ui, Page::Apps, "Apps", "Pick processes");
-                self.nav_button(ui, Page::Sites, "Websites", "Categories and lists");
-                self.nav_button(ui, Page::Settings, "Settings", "Daemon and recovery");
+        self.nav_button(ui, Page::Dashboard, "Dashboard", "Current session");
+        self.nav_button(ui, Page::Builder, "Block Builder", "Start a session");
+        self.nav_button(ui, Page::Apps, "Apps", "Pick processes");
+        self.nav_button(ui, Page::Sites, "Websites", "Categories and lists");
+        self.nav_button(ui, Page::Settings, "Settings", "Daemon and recovery");
 
-                ui.add_space(24.0);
-                card(ui, |ui| {
-                    ui.label(RichText::new("Selected").strong());
-                    ui.label(format!("{} sites", self.site_rules.len()));
-                    ui.label(format!("{} apps", self.app_rules.len()));
-                });
-            });
+        ui.add_space(28.0);
+        card(ui, |ui| {
+            ui.label(RichText::new("Selected").strong());
+            ui.label(format!("{} sites queued", self.site_rules.len()));
+            ui.label(format!("{} apps queued", self.app_rules.len()));
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("Use Block Builder to review before starting.")
+                    .small()
+                    .color(MUTED),
+            );
+        });
     }
 
     fn nav_button(&mut self, ui: &mut egui::Ui, page: Page, title: &str, subtitle: &str) {
@@ -225,8 +240,9 @@ impl ColdCatApp {
         egui::Frame::default()
             .fill(fill)
             .rounding(12.0)
-            .inner_margin(egui::Margin::symmetric(12.0, 9.0))
+            .inner_margin(egui::Margin::symmetric(12.0, 10.0))
             .show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 let response = ui
                     .vertical(|ui| {
                         ui.label(RichText::new(title).strong().color(if selected {
@@ -234,7 +250,9 @@ impl ColdCatApp {
                         } else {
                             Color32::WHITE
                         }));
-                        ui.label(RichText::new(subtitle).small().color(MUTED));
+                        ui.add(
+                            egui::Label::new(RichText::new(subtitle).small().color(MUTED)).wrap(),
+                        );
                     })
                     .response
                     .interact(egui::Sense::click());
@@ -242,67 +260,108 @@ impl ColdCatApp {
                     self.page = page;
                 }
             });
-        ui.add_space(6.0);
+        ui.add_space(8.0);
     }
 
     fn header(&mut self, ui: &mut egui::Ui) {
         card(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.vertical(|ui| {
-                    ui.heading(RichText::new(page_title(self.page)).size(24.0));
-                    ui.label(RichText::new(page_subtitle(self.page)).color(MUTED));
+                    ui.heading(RichText::new(page_title(self.page)).size(28.0));
+                    ui.add(
+                        egui::Label::new(RichText::new(page_subtitle(self.page)).color(MUTED))
+                            .wrap(),
+                    );
                 });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Refresh daemon").clicked() {
-                        self.refresh_status();
-                    }
-                    let state = self
-                        .status
-                        .as_ref()
-                        .map(|status| state_label(&status.state))
-                        .unwrap_or("Unknown");
-                    ui.label(RichText::new(state).color(status_color(self.status.as_ref())));
-                });
+                ui.separator();
+                if ui.button("Refresh daemon").clicked() {
+                    self.refresh_status();
+                }
+                let state = self
+                    .status
+                    .as_ref()
+                    .map(|status| state_label(&status.state))
+                    .unwrap_or("Unknown");
+                ui.label(
+                    RichText::new(state)
+                        .strong()
+                        .color(status_color(self.status.as_ref())),
+                );
             });
         });
     }
 
     fn dashboard(&mut self, ui: &mut egui::Ui) {
-        ui.columns(2, |columns| {
-            card(&mut columns[0], |ui| self.session_card(ui));
-            card(&mut columns[1], |ui| self.quick_actions_card(ui));
-        });
+        if ui.available_width() >= 760.0 {
+            ui.columns(2, |columns| {
+                card(&mut columns[0], |ui| self.session_card(ui));
+                card(&mut columns[1], |ui| self.quick_actions_card(ui));
+            });
+        } else {
+            card(ui, |ui| self.session_card(ui));
+            ui.add_space(12.0);
+            card(ui, |ui| self.quick_actions_card(ui));
+        }
 
         ui.add_space(12.0);
-        ui.columns(3, |columns| {
+        if ui.available_width() >= 780.0 {
+            ui.columns(3, |columns| {
+                metric_card(
+                    &mut columns[0],
+                    "Websites queued",
+                    self.site_rules.len(),
+                    "Use categories or manual entries",
+                );
+                metric_card(
+                    &mut columns[1],
+                    "Apps queued",
+                    self.app_rules.len(),
+                    "Use the process picker",
+                );
+                metric_card(
+                    &mut columns[2],
+                    "Duration",
+                    self.duration.as_str(),
+                    "Applies to the next block",
+                );
+            });
+        } else {
             metric_card(
-                &mut columns[0],
+                ui,
                 "Websites queued",
                 self.site_rules.len(),
                 "Use categories or manual entries",
             );
+            ui.add_space(12.0);
             metric_card(
-                &mut columns[1],
+                ui,
                 "Apps queued",
                 self.app_rules.len(),
                 "Use the process picker",
             );
+            ui.add_space(12.0);
             metric_card(
-                &mut columns[2],
+                ui,
                 "Duration",
                 self.duration.as_str(),
                 "Applies to the next block",
             );
-        });
+        }
 
         ui.add_space(12.0);
         card(ui, |ui| {
             ui.heading("Current draft");
             ui.add_space(8.0);
-            ui.columns(2, |columns| {
-                rule_list(&mut columns[0], "Sites", &self.site_rules);
-                rule_list(&mut columns[1], "Apps", &self.app_rules);
-            });
+            if ui.available_width() >= 620.0 {
+                ui.columns(2, |columns| {
+                    rule_list(&mut columns[0], "Sites", &self.site_rules);
+                    rule_list(&mut columns[1], "Apps", &self.app_rules);
+                });
+            } else {
+                rule_list(ui, "Sites", &self.site_rules);
+                ui.add_space(12.0);
+                rule_list(ui, "Apps", &self.app_rules);
+            }
         });
     }
 
@@ -395,165 +454,220 @@ impl ColdCatApp {
     }
 
     fn builder(&mut self, ui: &mut egui::Ui) {
-        ui.columns(2, |columns| {
-            card(&mut columns[0], |ui| {
-                ui.heading("1. Duration");
-                ui.label(
-                    RichText::new("Choose how long the block should be enforced.").color(MUTED),
-                );
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label("Duration");
-                    ui.text_edit_singleline(&mut self.duration);
+        if ui.available_width() >= 760.0 {
+            ui.columns(2, |columns| {
+                card(&mut columns[0], |ui| {
+                    self.duration_card(ui);
                 });
-                ui.horizontal_wrapped(|ui| {
-                    for quick in ["25m", "30m", "1h", "2h", "4h", "8h"] {
-                        if ui.button(quick).clicked() {
-                            self.duration = quick.to_string();
-                        }
-                    }
-                });
-            });
 
-            card(&mut columns[1], |ui| {
-                ui.heading("2. Start");
-                ui.label(
-                    RichText::new("The daemon will reject early clear/overwrite commands.")
-                        .color(MUTED),
-                );
-                ui.add_space(12.0);
-                if ui
-                    .add(
-                        egui::Button::new("Start enforced block")
-                            .min_size(egui::vec2(ui.available_width(), 46.0)),
-                    )
-                    .clicked()
-                {
-                    self.start_block();
-                }
-                ui.add_space(8.0);
-                self.message_strip(ui);
+                card(&mut columns[1], |ui| {
+                    self.start_card(ui);
+                });
             });
-        });
+        } else {
+            card(ui, |ui| self.duration_card(ui));
+            ui.add_space(12.0);
+            card(ui, |ui| self.start_card(ui));
+        }
 
         ui.add_space(12.0);
-        ui.columns(2, |columns| {
-            card(&mut columns[0], |ui| self.site_editor(ui));
-            card(&mut columns[1], |ui| self.app_editor(ui));
+        if ui.available_width() >= 760.0 {
+            ui.columns(2, |columns| {
+                card(&mut columns[0], |ui| self.site_editor(ui));
+                card(&mut columns[1], |ui| self.app_editor(ui));
+            });
+        } else {
+            card(ui, |ui| self.site_editor(ui));
+            ui.add_space(12.0);
+            card(ui, |ui| self.app_editor(ui));
+        }
+    }
+
+    fn duration_card(&mut self, ui: &mut egui::Ui) {
+        ui.heading("1. Duration");
+        ui.add(
+            egui::Label::new(
+                RichText::new("Choose how long the block should be enforced.").color(MUTED),
+            )
+            .wrap(),
+        );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("Duration");
+            ui.text_edit_singleline(&mut self.duration);
         });
+        ui.horizontal_wrapped(|ui| {
+            for quick in ["25m", "30m", "1h", "2h", "4h", "8h"] {
+                if ui.button(quick).clicked() {
+                    self.duration = quick.to_string();
+                }
+            }
+        });
+    }
+
+    fn start_card(&mut self, ui: &mut egui::Ui) {
+        ui.heading("2. Start");
+        ui.add(
+            egui::Label::new(
+                RichText::new("The daemon will reject early clear/overwrite commands.")
+                    .color(MUTED),
+            )
+            .wrap(),
+        );
+        ui.add_space(12.0);
+        if ui
+            .add(
+                egui::Button::new("Start enforced block")
+                    .min_size(egui::vec2(ui.available_width(), 46.0)),
+            )
+            .clicked()
+        {
+            self.start_block();
+        }
+        ui.add_space(8.0);
+        self.message_strip(ui);
     }
 
     fn apps_page(&mut self, ui: &mut egui::Ui) {
         card(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.heading("App picker");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Scan running apps").clicked() {
-                        self.scan_apps();
-                    }
-                    if ui.button("Scan installed apps").clicked() {
-                        self.scan_installed_apps();
-                    }
-                    if let Some(scan) = self.last_app_scan {
-                        ui.label(
-                            RichText::new(format!("Scanned {}s ago", scan.elapsed().as_secs()))
-                                .color(MUTED),
-                        );
-                    }
-                });
+                if ui.button("Scan running apps").clicked() {
+                    self.scan_apps();
+                }
+                if ui.button("Scan installed apps").clicked() {
+                    self.scan_installed_apps();
+                }
+                if let Some(scan) = self.last_app_scan {
+                    ui.label(
+                        RichText::new(format!("Scanned {}s ago", scan.elapsed().as_secs()))
+                            .color(MUTED),
+                    );
+                }
             });
-            ui.label(RichText::new("Pick apps from currently running processes, or add an executable name/path manually.").color(MUTED));
+            ui.add(
+                egui::Label::new(
+                    RichText::new(
+                        "Pick apps from currently running processes, scan installed apps, or add an executable name/path manually.",
+                    )
+                    .color(MUTED),
+                )
+                .wrap(),
+            );
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.label("Search");
-                ui.text_edit_singleline(&mut self.app_filter);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.app_filter).desired_width(f32::INFINITY),
+                );
             });
         });
 
         ui.add_space(12.0);
-        ui.columns(2, |columns| {
-            card(&mut columns[0], |ui| {
-                ui.heading("Running apps");
-                ui.add_space(8.0);
-                egui::ScrollArea::vertical()
-                    .max_height(430.0)
-                    .show(ui, |ui| {
-                        for candidate in self.filtered_candidates() {
-                            let already_selected = self
-                                .app_rules
-                                .iter()
-                                .any(|rule| rule.eq_ignore_ascii_case(&candidate.rule));
-                            app_candidate_row(ui, &candidate, already_selected, |rule| {
-                                add_unique_rule(&mut self.app_rules, rule);
-                            });
-                        }
-                    });
+        if ui.available_width() >= 900.0 {
+            ui.columns(2, |columns| {
+                card(&mut columns[0], |ui| self.running_apps_card(ui));
+                card(&mut columns[1], |ui| self.app_editor(ui));
             });
+        } else {
+            card(ui, |ui| self.running_apps_card(ui));
+            ui.add_space(12.0);
+            card(ui, |ui| self.app_editor(ui));
+        }
+    }
 
-            card(&mut columns[1], |ui| self.app_editor(ui));
-        });
+    fn running_apps_card(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Discovered apps");
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical()
+            .max_height(430.0)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for candidate in self.filtered_candidates() {
+                    let already_selected = self
+                        .app_rules
+                        .iter()
+                        .any(|rule| rule.eq_ignore_ascii_case(&candidate.rule));
+                    app_candidate_row(ui, &candidate, already_selected, |rule| {
+                        add_unique_rule(&mut self.app_rules, rule);
+                    });
+                }
+            });
     }
 
     fn sites_page(&mut self, ui: &mut egui::Ui) {
         card(ui, |ui| {
             ui.heading("Website presets");
-            ui.label(
-                RichText::new("Add whole categories, then remove anything you still need.")
-                    .color(MUTED),
+            ui.add(
+                egui::Label::new(
+                    RichText::new("Add whole categories, then remove anything you still need.")
+                        .color(MUTED),
+                )
+                .wrap(),
             );
         });
         ui.add_space(12.0);
 
-        egui::Grid::new("site_categories")
-            .num_columns(2)
-            .spacing([12.0, 12.0])
-            .show(ui, |ui| {
-                for (index, category) in SITE_CATEGORIES.iter().enumerate() {
-                    category_card(ui, category, |sites| {
-                        for site in sites {
-                            add_unique_rule(&mut self.site_rules, (*site).to_string());
+        if ui.available_width() >= 900.0 {
+            for row in SITE_CATEGORIES.chunks(2) {
+                ui.columns(2, |columns| {
+                    for (index, category) in row.iter().enumerate() {
+                        if category_card(&mut columns[index], category) {
+                            for site in category.sites {
+                                add_unique_rule(&mut self.site_rules, (*site).to_string());
+                            }
                         }
-                    });
-                    if index % 2 == 1 {
-                        ui.end_row();
+                    }
+                });
+                ui.add_space(12.0);
+            }
+        } else {
+            for category in SITE_CATEGORIES {
+                if category_card(ui, category) {
+                    for site in category.sites {
+                        add_unique_rule(&mut self.site_rules, (*site).to_string());
                     }
                 }
-            });
+                ui.add_space(12.0);
+            }
+        }
 
-        ui.add_space(12.0);
         card(ui, |ui| self.site_editor(ui));
     }
 
     fn settings(&mut self, ui: &mut egui::Ui) {
-        ui.columns(2, |columns| {
-            card(&mut columns[0], |ui| {
-                ui.heading("Daemon");
-                ui.label(
-                    RichText::new(
-                        "The GUI is a front-end. Enforcement stays in the privileged daemon.",
-                    )
-                    .color(MUTED),
-                );
-                ui.add_space(8.0);
-                if ui.button("Refresh status").clicked() {
-                    self.refresh_status();
-                }
-                if ui.button("Recover after expiry").clicked() {
-                    self.recover();
-                }
-                ui.add_space(8.0);
-                self.message_strip(ui);
+        if ui.available_width() >= 760.0 {
+            ui.columns(2, |columns| {
+                card(&mut columns[0], |ui| self.daemon_settings_card(ui));
+                card(&mut columns[1], security_model_card);
             });
+        } else {
+            card(ui, |ui| self.daemon_settings_card(ui));
+            ui.add_space(12.0);
+            card(ui, security_model_card);
+        }
+    }
 
-            card(&mut columns[1], |ui| {
-                ui.heading("Security model");
-                ui.label("Active sessions cannot be cleared by this GUI before expiry.");
-                ui.label("State is signed by the daemon and stored in privileged locations.");
-                ui.label(
-                    "Administrator/root recovery is intentionally documented for owner control.",
-                );
-            });
-        });
+    fn daemon_settings_card(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Daemon");
+        ui.add(
+            egui::Label::new(
+                RichText::new(
+                    "The GUI is a front-end. Enforcement stays in the privileged daemon.",
+                )
+                .color(MUTED),
+            )
+            .wrap(),
+        );
+        ui.add_space(8.0);
+        if ui.button("Refresh status").clicked() {
+            self.refresh_status();
+        }
+        if ui.button("Recover after expiry").clicked() {
+            self.recover();
+        }
+        ui.add_space(8.0);
+        self.message_strip(ui);
     }
 
     fn site_editor(&mut self, ui: &mut egui::Ui) {
@@ -725,6 +839,7 @@ impl ColdCatApp {
 fn apply_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
     style.visuals = egui::Visuals::dark();
+    style.visuals.override_text_color = Some(Color32::from_rgb(238, 244, 255));
     style.visuals.panel_fill = BG;
     style.visuals.window_fill = PANEL;
     style.visuals.widgets.active.bg_fill = ACCENT;
@@ -819,7 +934,10 @@ fn app_candidate_row(
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label(RichText::new(&candidate.name).strong());
-                    ui.label(RichText::new(&candidate.detail).small().color(MUTED));
+                    ui.add(
+                        egui::Label::new(RichText::new(&candidate.detail).small().color(MUTED))
+                            .wrap(),
+                    );
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if already_selected {
@@ -833,27 +951,46 @@ fn app_candidate_row(
     ui.add_space(6.0);
 }
 
-fn category_card(ui: &mut egui::Ui, category: &SiteCategory, mut add: impl FnMut(&[&str])) {
+fn category_card(ui: &mut egui::Ui, category: &SiteCategory) -> bool {
+    let mut clicked = false;
     egui::Frame::default()
         .fill(CARD)
         .stroke(Stroke::new(1.0, BORDER))
         .rounding(16.0)
         .inner_margin(egui::Margin::same(16.0))
         .show(ui, |ui| {
-            ui.set_min_width(420.0);
             ui.heading(category.name);
-            ui.label(RichText::new(category.subtitle).color(MUTED));
+            ui.add(egui::Label::new(RichText::new(category.subtitle).color(MUTED)).wrap());
             ui.add_space(6.0);
-            ui.label(
-                RichText::new(category.sites.join(", "))
-                    .small()
-                    .color(MUTED),
+            ui.add(
+                egui::Label::new(
+                    RichText::new(category.sites.join(", "))
+                        .small()
+                        .color(MUTED),
+                )
+                .wrap(),
             );
             ui.add_space(8.0);
             if ui.button("Add category").clicked() {
-                add(category.sites);
+                clicked = true;
             }
         });
+    clicked
+}
+
+fn security_model_card(ui: &mut egui::Ui) {
+    ui.heading("Security model");
+    ui.add(egui::Label::new("Active sessions cannot be cleared by this GUI before expiry.").wrap());
+    ui.add(
+        egui::Label::new("State is signed by the daemon and stored in privileged locations.")
+            .wrap(),
+    );
+    ui.add(
+        egui::Label::new(
+            "Administrator/root recovery is intentionally documented for owner control.",
+        )
+        .wrap(),
+    );
 }
 
 fn scan_running_apps() -> Vec<AppCandidate> {
