@@ -776,6 +776,7 @@ name = "coldcat-gui"
 version = "0.1.0"
 dependencies = [
  "coldcat-core",
+ "coldcat-platform",
  "eframe",
  "serde",
  "serde_json",
@@ -790,6 +791,7 @@ dependencies = [
  "coldcat-core",
  "serde_json",
  "sysinfo",
+ "tempfile",
 ]
 
 [[package]]

@@ -4,7 +4,9 @@ use coldcat_core::client::send_command;
 use coldcat_core::duration::parse_duration_secs;
 use coldcat_core::protocol::{CommandRequest, CommandResponse, ServiceState};
 use coldcat_core::DEFAULT_DAEMON_ADDR;
-use coldcat_platform::PlatformPaths;
+use coldcat_platform::{
+    discover_installed_apps, expand_app_rules, repair_installation, PlatformPaths,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "coldcat")]
@@ -32,6 +34,10 @@ enum Command {
     Status,
     /// Run post-expiry cleanup. Refused while a session is active.
     Recover,
+    /// List installed applications discovered for app-block rules.
+    Apps,
+    /// Repair Cold Cat's local privileged directories and file modes.
+    Repair,
     /// Check local paths and daemon connectivity.
     Doctor,
 }
@@ -48,7 +54,7 @@ fn main() -> Result<()> {
                 name: "CLI Block".to_string(),
                 duration_secs: duration,
                 sites,
-                apps,
+                apps: expand_app_rules(&apps),
             })?;
             print_response(&response);
             exit_for_response(response);
@@ -63,6 +69,8 @@ fn main() -> Result<()> {
             print_response(&response);
             exit_for_response(response);
         }
+        Command::Apps => list_apps(),
+        Command::Repair => repair(),
         Command::Doctor => doctor(),
     }
 }
@@ -120,6 +128,7 @@ fn doctor() -> Result<()> {
     println!("state_backup_file: {}", paths.state_backup_file.display());
     println!("key_file: {}", paths.key_file.display());
     println!("hosts_file: {}", paths.hosts_file.display());
+    println!("installed_apps: {}", discover_installed_apps().len());
 
     match send_command(CommandRequest::Status) {
         Ok(response) => {
@@ -131,6 +140,28 @@ fn doctor() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn list_apps() -> Result<()> {
+    let apps = discover_installed_apps();
+    if apps.is_empty() {
+        println!("No installed applications discovered.");
+        return Ok(());
+    }
+
+    for app in apps {
+        println!("{}\t{}\t{}", app.name, app.rule, app.detail);
+    }
+    Ok(())
+}
+
+fn repair() -> Result<()> {
+    repair_installation()?;
+    println!("Cold Cat local directories and file modes repaired.");
+    println!(
+        "Run `sudo packaging/linux/install.sh --repair` from the repository to repair the Linux systemd unit and desktop launcher."
+    );
     Ok(())
 }
 
@@ -169,5 +200,17 @@ mod tests {
     #[test]
     fn rejects_bad_duration() {
         assert!(Args::try_parse_from(["coldcat", "start", "--duration", "soon"]).is_err());
+    }
+
+    #[test]
+    fn parses_linux_support_commands() {
+        assert!(matches!(
+            Args::try_parse_from(["coldcat", "apps"]).unwrap().command,
+            Command::Apps
+        ));
+        assert!(matches!(
+            Args::try_parse_from(["coldcat", "repair"]).unwrap().command,
+            Command::Repair
+        ));
     }
 }

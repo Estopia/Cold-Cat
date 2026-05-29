@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Cold Cat
+Comment=Website and application blocker
+Exec=@BINDIR@/coldcat-gui
+Icon=coldcat
+Terminal=false
+Categories=Utility;Productivity;
+StartupNotify=true

@@ -8,7 +8,10 @@ use std::time::Duration;
 use std::env;
 
 use anyhow::{anyhow, bail, Context, Result};
-use coldcat_core::apps::{process_matches_rule, ProcessRecord};
+use coldcat_core::apps::{
+    desktop_app_from_content, desktop_app_matches_query, normalize_app_rule, process_matches_rule,
+    DesktopApp, ProcessRecord,
+};
 use coldcat_core::hosts::{apply_hosts_block, strip_managed_block};
 use coldcat_core::session::ActiveSession;
 use coldcat_core::state::{
@@ -84,6 +87,17 @@ impl SystemEnforcer {
         Ok(())
     }
 
+    pub fn repair_layout(&self) -> Result<()> {
+        self.ensure_layout()?;
+        repair_private_path(&self.paths.state_dir, true)?;
+        repair_private_path(&self.paths.config_dir, true)?;
+        repair_private_path(&self.paths.runtime_dir, true)?;
+        repair_hardened_file(&self.paths.key_file)?;
+        repair_hardened_file(&self.paths.state_file)?;
+        repair_hardened_file(&self.paths.state_backup_file)?;
+        Ok(())
+    }
+
     pub fn apply_hosts(&self, sites: &[String]) -> Result<()> {
         let existing = read_text_or_empty(&self.paths.hosts_file)?;
         let desired = apply_hosts_block(&existing, sites)?;
@@ -115,11 +129,17 @@ impl SystemEnforcer {
             return Ok(0);
         }
 
+        let rules = expand_app_rules(apps);
+        if rules.is_empty() {
+            return Ok(0);
+        }
+
         let mut system = System::new_all();
         system.refresh_processes();
         let current_pid = sysinfo::get_current_pid().ok();
         let mut killed = 0_usize;
         let mut term_sent = Vec::new();
+        let mut direct_matches = Vec::new();
 
         for (pid, process) in system.processes() {
             if current_pid.as_ref() == Some(pid) {
@@ -129,15 +149,33 @@ impl SystemEnforcer {
             let record = ProcessRecord {
                 name: process.name().to_string(),
                 exe: Some(process.exe().to_string_lossy().to_string()),
+                cmdline: process.cmd().to_vec(),
             };
 
-            if apps.iter().any(|rule| process_matches_rule(rule, &record)) {
-                if process.kill_with(Signal::Term).unwrap_or(false) {
-                    killed += 1;
-                    term_sent.push(*pid);
-                } else if process.kill() {
-                    killed += 1;
-                }
+            if rules.iter().any(|rule| process_matches_rule(rule, &record)) {
+                direct_matches.push(*pid);
+            }
+        }
+
+        let mut targets = direct_matches.clone();
+        for pid in system.processes().keys().copied() {
+            if current_pid.as_ref() == Some(&pid) || targets.contains(&pid) {
+                continue;
+            }
+            if process_is_descendant_of(&system, pid, &direct_matches) {
+                targets.push(pid);
+            }
+        }
+
+        for pid in targets {
+            let Some(process) = system.process(pid) else {
+                continue;
+            };
+            if process.kill_with(Signal::Term).unwrap_or(false) {
+                killed += 1;
+                term_sent.push(pid);
+            } else if process.kill() {
+                killed += 1;
             }
         }
 
@@ -153,6 +191,145 @@ impl SystemEnforcer {
 
         Ok(killed)
     }
+}
+
+pub fn repair_installation() -> Result<()> {
+    SystemEnforcer::detect().repair_layout()
+}
+
+pub fn discover_installed_apps() -> Vec<DesktopApp> {
+    #[cfg(target_os = "linux")]
+    {
+        discover_linux_installed_apps_from_dirs(linux_application_dirs())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Vec::new()
+    }
+}
+
+pub fn expand_app_rules(apps: &[String]) -> Vec<String> {
+    expand_app_rules_with_installed_apps(apps, &discover_installed_apps())
+}
+
+pub fn expand_app_rules_with_installed_apps(
+    apps: &[String],
+    installed_apps: &[DesktopApp],
+) -> Vec<String> {
+    let mut expanded = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for app_rule in apps {
+        let app_rule = app_rule.trim();
+        if app_rule.is_empty() {
+            continue;
+        }
+
+        let mut matched = false;
+        for app in installed_apps
+            .iter()
+            .filter(|candidate| desktop_app_matches_query(candidate, app_rule))
+        {
+            matched = true;
+            for rule in app_rule_enforcement_aliases(app) {
+                push_unique_rule(&mut expanded, &mut seen, rule);
+            }
+        }
+
+        if !matched {
+            push_unique_rule(&mut expanded, &mut seen, app_rule.to_string());
+        }
+    }
+
+    expanded
+}
+
+fn app_rule_enforcement_aliases(app: &DesktopApp) -> Vec<String> {
+    let mut aliases = vec![app.rule.clone()];
+    aliases.extend(app.aliases.clone());
+    aliases
+}
+
+fn push_unique_rule(
+    rules: &mut Vec<String>,
+    seen: &mut std::collections::BTreeSet<String>,
+    rule: String,
+) {
+    let normalized = normalize_app_rule(&rule);
+    if !normalized.is_empty() && seen.insert(normalized) {
+        rules.push(rule);
+    }
+}
+
+fn process_is_descendant_of(
+    system: &System,
+    pid: sysinfo::Pid,
+    ancestors: &[sysinfo::Pid],
+) -> bool {
+    let mut current = pid;
+    let mut visited = Vec::new();
+    while let Some(process) = system.process(current) {
+        let Some(parent) = process.parent() else {
+            return false;
+        };
+        if ancestors.contains(&parent) {
+            return true;
+        }
+        if visited.contains(&parent) {
+            return false;
+        }
+        visited.push(parent);
+        current = parent;
+    }
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn discover_linux_installed_apps_from_dirs(dirs: Vec<PathBuf>) -> Vec<DesktopApp> {
+    let mut apps = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for dir in dirs {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("desktop") {
+                continue;
+            }
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            if let Some(app) = desktop_app_from_content(&path, &content) {
+                let key = normalize_app_rule(&app.rule);
+                if seen.insert(key) {
+                    apps.push(app);
+                }
+            }
+        }
+    }
+
+    apps.sort_by_key(|app| app.name.to_ascii_lowercase());
+    apps
+}
+
+#[cfg(target_os = "linux")]
+fn linux_application_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![
+        PathBuf::from("/usr/share/applications"),
+        PathBuf::from("/usr/local/share/applications"),
+        PathBuf::from("/var/lib/snapd/desktop/applications"),
+        PathBuf::from("/var/lib/flatpak/exports/share/applications"),
+    ];
+
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        dirs.push(home.join(".local/share/applications"));
+        dirs.push(home.join(".local/share/flatpak/exports/share/applications"));
+    }
+
+    dirs
 }
 
 #[derive(Debug, Clone)]
@@ -272,6 +449,22 @@ fn write_text(path: &Path, value: &str) -> Result<()> {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
     fs::write(path, value).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+fn repair_private_path(path: &Path, directory: bool) -> Result<()> {
+    if path.exists() {
+        restrict_private_path(path, directory)?;
+    }
+    Ok(())
+}
+
+fn repair_hardened_file(path: &Path) -> Result<()> {
+    if path.exists() {
+        set_file_hardened(path, false)?;
+        restrict_private_path(path, false)?;
+        set_file_hardened(path, true)?;
+    }
     Ok(())
 }
 
@@ -421,4 +614,63 @@ fn restrict_private_path(_path: &Path, _directory: bool) -> Result<()> {
 
 fn path_should_be_hardened(path: &Path) -> bool {
     path.try_exists().unwrap_or(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn expands_friendly_desktop_app_name_to_enforceable_rules() {
+        let app = DesktopApp {
+            name: "Visual Studio Code".to_string(),
+            desktop_id: "code.desktop".to_string(),
+            rule: "code".to_string(),
+            detail: "Desktop: /usr/share/applications/code.desktop".to_string(),
+            aliases: vec![
+                "code".to_string(),
+                "code.desktop".to_string(),
+                "/usr/bin/code".to_string(),
+            ],
+        };
+
+        assert_eq!(
+            expand_app_rules_with_installed_apps(&["Visual Studio Code".to_string()], &[app]),
+            vec!["code", "code.desktop", "/usr/bin/code"]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn discovers_linux_desktop_snap_and_flatpak_apps_from_directories() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let applications = temp_dir.path().join("applications");
+        fs::create_dir_all(&applications).unwrap();
+
+        write_desktop_file(
+            &applications.join("firefox.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\n",
+        );
+        write_desktop_file(
+            &applications.join("spotify_spotify.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Spotify\nExec=/snap/bin/spotify %U\n",
+        );
+        write_desktop_file(
+            &applications.join("org.mozilla.firefox.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Firefox Flatpak\nExec=flatpak run org.mozilla.firefox %u\n",
+        );
+
+        let apps = discover_linux_installed_apps_from_dirs(vec![applications]);
+        let rules: Vec<_> = apps.iter().map(|app| app.rule.as_str()).collect();
+        assert!(rules.contains(&"firefox"));
+        assert!(rules.contains(&"spotify"));
+        assert!(rules.contains(&"org.mozilla.firefox"));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn write_desktop_file(path: &Path, content: &str) {
+        let mut file = fs::File::create(path).unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+    }
 }

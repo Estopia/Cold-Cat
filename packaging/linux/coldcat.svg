@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Cold Cat">
+  <rect width="128" height="128" rx="28" fill="#dbeafe"/>
+  <path d="M32 52 25 28l22 13a48 48 0 0 1 34 0l22-13-7 24c6 8 9 18 9 29 0 26-18 39-41 39S23 107 23 81c0-11 3-21 9-29Z" fill="#2563eb"/>
+  <path d="M42 79c4 0 7-4 7-9s-3-9-7-9-7 4-7 9 3 9 7 9Zm44 0c4 0 7-4 7-9s-3-9-7-9-7 4-7 9 3 9 7 9Z" fill="#f8fafc"/>
+  <path d="M53 92h22c-2 7-6 11-11 11s-9-4-11-11Z" fill="#bfdbfe"/>
+  <path d="M61 82h6l-3 5-3-5Z" fill="#172554"/>
+  <path d="M45 31 35 24l4 14 6-7Zm38 0 10-7-4 14-6-7Z" fill="#1e40af"/>
+</svg>

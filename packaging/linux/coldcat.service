@@ -1,7 +1,7 @@
 [Unit]
 Description=Cold Cat blocking daemon
-After=network.target
-RefuseManualStop=yes
+Wants=network-online.target
+After=network-online.target
 StartLimitIntervalSec=0
 
 [Service]
@@ -10,11 +10,28 @@ ExecStart=/usr/local/bin/coldcat-daemon run
 User=root
 Restart=always
 RestartSec=1
+TimeoutStopSec=10
+KillSignal=SIGINT
+UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/etc/hosts /etc/cold-cat /var/lib/cold-cat /run/cold-cat
+LockPersonality=true
+MemoryDenyWriteExecute=true
+PrivateDevices=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

@@ -11,3 +11,5 @@ coldcat-core = { path = "../coldcat-core" }
 serde_json.workspace = true
 sysinfo.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true

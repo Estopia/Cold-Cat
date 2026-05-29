@@ -161,7 +161,7 @@ fn built_in_profiles() -> Vec<BlockProfile> {
                 "x.com".to_string(),
                 "instagram.com".to_string(),
             ],
-            apps: vec!["discord.exe".to_string(), "steam.exe".to_string()],
+            apps: vec![profile_app_rule("discord"), profile_app_rule("steam")],
         },
         BlockProfile {
             name: "Study Session".to_string(),
@@ -172,7 +172,10 @@ fn built_in_profiles() -> Vec<BlockProfile> {
                 "twitch.tv".to_string(),
                 "netflix.com".to_string(),
             ],
-            apps: vec!["steam.exe".to_string(), "epicgameslauncher.exe".to_string()],
+            apps: vec![
+                profile_app_rule("steam"),
+                profile_app_rule("epicgameslauncher"),
+            ],
         },
         BlockProfile {
             name: "Social Detox".to_string(),
@@ -186,7 +189,7 @@ fn built_in_profiles() -> Vec<BlockProfile> {
                 "facebook.com".to_string(),
                 "tiktok.com".to_string(),
             ],
-            apps: vec!["discord.exe".to_string()],
+            apps: vec![profile_app_rule("discord")],
         },
         BlockProfile {
             name: "Workday".to_string(),
@@ -198,9 +201,20 @@ fn built_in_profiles() -> Vec<BlockProfile> {
                 "twitch.tv".to_string(),
                 "amazon.com".to_string(),
             ],
-            apps: vec!["steam.exe".to_string(), "discord.exe".to_string()],
+            apps: vec![profile_app_rule("steam"), profile_app_rule("discord")],
         },
     ]
+}
+
+fn profile_app_rule(name: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("{name}.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        name.to_string()
+    }
 }
 
 struct ColdCatApp {
@@ -992,6 +1006,7 @@ impl ColdCatApp {
         for app in parse_rule_text(&self.manual_app) {
             add_unique_rule(&mut apps, app);
         }
+        apps = coldcat_platform::expand_app_rules(&apps);
 
         if sites.is_empty() && apps.is_empty() {
             self.error = Some("Add at least one website or application to block.".to_string());
@@ -1878,33 +1893,14 @@ fn scan_platform_installed_apps() -> Vec<AppCandidate> {
 
 #[cfg(target_os = "linux")]
 fn scan_platform_installed_apps() -> Vec<AppCandidate> {
-    let mut candidates = Vec::new();
-    let mut desktop_dirs = vec![std::path::PathBuf::from("/usr/share/applications")];
-    if let Some(home) = env::var_os("HOME") {
-        desktop_dirs.push(
-            std::path::PathBuf::from(home)
-                .join(".local")
-                .join("share")
-                .join("applications"),
-        );
-    }
-
-    for dir in desktop_dirs {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("desktop") {
-                continue;
-            }
-            if let Some(candidate) = candidate_from_desktop_file(&path) {
-                candidates.push(candidate);
-            }
-        }
-    }
-
-    candidates
+    coldcat_platform::discover_installed_apps()
+        .into_iter()
+        .map(|app| AppCandidate {
+            name: app.name,
+            rule: app.rule,
+            detail: app.detail,
+        })
+        .collect()
 }
 
 #[cfg(all(not(windows), not(target_os = "linux")))]
@@ -1955,37 +1951,6 @@ fn candidate_from_exe(path: &Path) -> Option<AppCandidate> {
     Some(AppCandidate {
         name,
         rule: file_name,
-        detail: path.to_string_lossy().to_string(),
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn candidate_from_desktop_file(path: &Path) -> Option<AppCandidate> {
-    let content = fs::read_to_string(path).ok()?;
-    let mut name = None;
-    let mut exec = None;
-    for line in content.lines() {
-        if let Some(value) = line.strip_prefix("Name=") {
-            name = Some(value.trim().to_string());
-        } else if let Some(value) = line.strip_prefix("Exec=") {
-            exec = Some(value.trim().to_string());
-        }
-    }
-
-    let exec = exec?;
-    let command = exec
-        .split_whitespace()
-        .find(|part| !part.starts_with('%'))?
-        .trim_matches('"');
-    let rule = Path::new(command)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(command)
-        .to_string();
-
-    Some(AppCandidate {
-        name: name.unwrap_or_else(|| rule.clone()),
-        rule,
         detail: path.to_string_lossy().to_string(),
     })
 }
