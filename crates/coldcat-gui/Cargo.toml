@@ -12,4 +12,4 @@ path = "src/main.rs"
 [dependencies]
 coldcat-core = { path = "../coldcat-core" }
 eframe.workspace = true
-
+sysinfo.workspace = true
