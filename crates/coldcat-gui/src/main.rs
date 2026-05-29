@@ -236,30 +236,43 @@ impl ColdCatApp {
 
     fn nav_button(&mut self, ui: &mut egui::Ui, page: Page, title: &str, subtitle: &str) {
         let selected = self.page == page;
-        let fill = if selected { CARD_ALT } else { PANEL };
-        egui::Frame::default()
-            .fill(fill)
-            .rounding(12.0)
-            .inner_margin(egui::Margin::symmetric(12.0, 10.0))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                let response = ui
-                    .vertical(|ui| {
-                        ui.label(RichText::new(title).strong().color(if selected {
-                            ACCENT
-                        } else {
-                            Color32::WHITE
-                        }));
-                        ui.add(
-                            egui::Label::new(RichText::new(subtitle).small().color(MUTED)).wrap(),
-                        );
-                    })
-                    .response
-                    .interact(egui::Sense::click());
-                if response.clicked() {
-                    self.page = page;
-                }
-            });
+        let width = ui.available_width().max(1.0);
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(width, 62.0), egui::Sense::click());
+        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+        if response.clicked() {
+            self.page = page;
+        }
+
+        let fill = if selected {
+            CARD_ALT
+        } else if response.hovered() {
+            Color32::from_rgb(28, 39, 59)
+        } else {
+            PANEL
+        };
+        let stroke = if selected {
+            Stroke::new(1.5, ACCENT)
+        } else {
+            Stroke::new(1.0, Color32::TRANSPARENT)
+        };
+
+        ui.painter().rect(rect, 12.0, fill, stroke);
+        ui.painter().text(
+            rect.left_top() + egui::vec2(14.0, 12.0),
+            egui::Align2::LEFT_TOP,
+            title,
+            egui::FontId::proportional(17.0),
+            if selected { ACCENT } else { Color32::WHITE },
+        );
+        ui.painter().text(
+            rect.left_top() + egui::vec2(14.0, 36.0),
+            egui::Align2::LEFT_TOP,
+            subtitle,
+            egui::FontId::proportional(13.0),
+            MUTED,
+        );
         ui.add_space(8.0);
     }
 
