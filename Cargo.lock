@@ -777,6 +777,8 @@ version = "0.1.0"
 dependencies = [
  "coldcat-core",
  "eframe",
+ "serde",
+ "serde_json",
  "sysinfo",
 ]
 

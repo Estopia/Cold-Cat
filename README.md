@@ -30,11 +30,16 @@ The GUI provides a Cold Turkey-style workflow without copying its exact visual d
 
 - clean neutral light app shell with icon sidebar navigation
 - dashboard cards for active session state, draft counts, and quick actions
+- vector-drawn navigation/logo icons so the UI does not depend on missing font glyphs
 - duration entry with quick buttons for common session lengths
 - website category presets for social, video, gaming, shopping, and news
 - removable website and application rule cards
 - app picker that scans running processes and installed Windows applications
 - search over discovered apps plus manual executable/name entry
+- built-in profiles for common focus sessions
+- saved custom profiles stored in the user's app config directory
+- draft actions to save, clear, reload, start, or copy the active session into a new draft
+- optional auto-refresh for daemon/session status
 - solid primary-action buttons, including a prominent **Start enforced block** action
 - styled success/error alert boxes instead of raw terminal-like messages
 - live daemon/session status with progress and countdown

@@ -1,13 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::path::Path;
-use std::time::Instant;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use coldcat_core::client::send_command;
 use coldcat_core::duration::parse_duration_secs;
 use coldcat_core::protocol::{CommandRequest, CommandResponse, ServiceState, ServiceStatus};
 use eframe::egui::{self, epaint::Shadow, Color32, RichText, Stroke};
+use serde::{Deserialize, Serialize};
 use sysinfo::{ProcessExt, System, SystemExt};
 
 const TEXT: Color32 = Color32::from_rgb(17, 24, 39);
@@ -47,6 +48,17 @@ fn main() -> eframe::Result {
 enum Page {
     Dashboard,
     Builder,
+    Profiles,
+    Apps,
+    Sites,
+    Settings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NavIcon {
+    Dashboard,
+    Builder,
+    Profiles,
     Apps,
     Sites,
     Settings,
@@ -64,6 +76,14 @@ struct SiteCategory {
     name: &'static str,
     subtitle: &'static str,
     sites: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct BlockProfile {
+    name: String,
+    duration: String,
+    sites: Vec<String>,
+    apps: Vec<String>,
 }
 
 const SITE_CATEGORIES: &[SiteCategory] = &[
@@ -128,6 +148,59 @@ const SITE_CATEGORIES: &[SiteCategory] = &[
     },
 ];
 
+fn built_in_profiles() -> Vec<BlockProfile> {
+    vec![
+        BlockProfile {
+            name: "Deep Work".to_string(),
+            duration: "2h".to_string(),
+            sites: vec![
+                "reddit.com".to_string(),
+                "youtube.com".to_string(),
+                "x.com".to_string(),
+                "instagram.com".to_string(),
+            ],
+            apps: vec!["discord.exe".to_string(), "steam.exe".to_string()],
+        },
+        BlockProfile {
+            name: "Study Session".to_string(),
+            duration: "1h30m".to_string(),
+            sites: vec![
+                "tiktok.com".to_string(),
+                "youtube.com".to_string(),
+                "twitch.tv".to_string(),
+                "netflix.com".to_string(),
+            ],
+            apps: vec!["steam.exe".to_string(), "epicgameslauncher.exe".to_string()],
+        },
+        BlockProfile {
+            name: "Social Detox".to_string(),
+            duration: "4h".to_string(),
+            sites: vec![
+                "reddit.com".to_string(),
+                "old.reddit.com".to_string(),
+                "x.com".to_string(),
+                "twitter.com".to_string(),
+                "instagram.com".to_string(),
+                "facebook.com".to_string(),
+                "tiktok.com".to_string(),
+            ],
+            apps: vec!["discord.exe".to_string()],
+        },
+        BlockProfile {
+            name: "Workday".to_string(),
+            duration: "8h".to_string(),
+            sites: vec![
+                "reddit.com".to_string(),
+                "youtube.com".to_string(),
+                "netflix.com".to_string(),
+                "twitch.tv".to_string(),
+                "amazon.com".to_string(),
+            ],
+            apps: vec!["steam.exe".to_string(), "discord.exe".to_string()],
+        },
+    ]
+}
+
 #[derive(Debug)]
 struct ColdCatApp {
     page: Page,
@@ -136,11 +209,16 @@ struct ColdCatApp {
     app_rules: Vec<String>,
     manual_site: String,
     manual_app: String,
+    draft_name: String,
+    profiles: Vec<BlockProfile>,
+    selected_profile: Option<usize>,
     app_filter: String,
     app_candidates: Vec<AppCandidate>,
     last_app_scan: Option<Instant>,
     status: Option<ServiceStatus>,
     status_fetched_at: Option<Instant>,
+    auto_refresh: bool,
+    last_auto_refresh: Instant,
     message: String,
     error: Option<String>,
     last_action: String,
@@ -155,11 +233,16 @@ impl Default for ColdCatApp {
             app_rules: Vec::new(),
             manual_site: String::new(),
             manual_app: String::new(),
+            draft_name: "New block".to_string(),
+            profiles: load_profiles(),
+            selected_profile: None,
             app_filter: String::new(),
             app_candidates: Vec::new(),
             last_app_scan: None,
             status: None,
             status_fetched_at: None,
+            auto_refresh: false,
+            last_auto_refresh: Instant::now(),
             message: "Ready. Install and start the daemon, then build a block.".to_string(),
             error: None,
             last_action: "Ready".to_string(),
@@ -171,6 +254,8 @@ impl Default for ColdCatApp {
 
 impl eframe::App for ColdCatApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.maybe_auto_refresh();
+
         egui::SidePanel::left("coldcat_sidebar")
             .exact_width(280.0)
             .frame(
@@ -200,6 +285,7 @@ impl eframe::App for ColdCatApp {
                         match self.page {
                             Page::Dashboard => self.dashboard(ui),
                             Page::Builder => self.builder(ui),
+                            Page::Profiles => self.profiles_page(ui),
                             Page::Apps => self.apps_page(ui),
                             Page::Sites => self.sites_page(ui),
                             Page::Settings => self.settings(ui),
@@ -212,17 +298,19 @@ impl eframe::App for ColdCatApp {
 impl ColdCatApp {
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("●").size(24.0).color(ACCENT));
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+            draw_logo(ui.painter(), rect, ACCENT);
             ui.heading(RichText::new("Cold Cat").size(26.0).color(TEXT));
         });
         ui.label(RichText::new("Enforced focus").color(MUTED));
         ui.add_space(30.0);
 
-        self.nav_button(ui, Page::Dashboard, "⌂", "Dashboard");
-        self.nav_button(ui, Page::Builder, "□", "Block Builder");
-        self.nav_button(ui, Page::Apps, "◉", "Apps");
-        self.nav_button(ui, Page::Sites, "◎", "Websites");
-        self.nav_button(ui, Page::Settings, "⚙", "Settings");
+        self.nav_button(ui, Page::Dashboard, NavIcon::Dashboard, "Dashboard");
+        self.nav_button(ui, Page::Builder, NavIcon::Builder, "Block Builder");
+        self.nav_button(ui, Page::Profiles, NavIcon::Profiles, "Profiles");
+        self.nav_button(ui, Page::Apps, NavIcon::Apps, "Apps");
+        self.nav_button(ui, Page::Sites, NavIcon::Sites, "Websites");
+        self.nav_button(ui, Page::Settings, NavIcon::Settings, "Settings");
 
         ui.add_space(28.0);
         card(ui, |ui| {
@@ -238,7 +326,7 @@ impl ColdCatApp {
         });
     }
 
-    fn nav_button(&mut self, ui: &mut egui::Ui, page: Page, icon: &str, title: &str) {
+    fn nav_button(&mut self, ui: &mut egui::Ui, page: Page, icon: NavIcon, title: &str) {
         let selected = self.page == page;
         let width = ui.available_width().max(1.0);
         let (rect, response) =
@@ -265,11 +353,14 @@ impl ColdCatApp {
             );
             ui.painter().rect_filled(bar, 2.0, ACCENT);
         }
-        ui.painter().text(
-            rect.left_top() + egui::vec2(18.0, 14.0),
-            egui::Align2::LEFT_TOP,
+        let icon_rect = egui::Rect::from_center_size(
+            rect.left_center() + egui::vec2(27.0, 0.0),
+            egui::vec2(20.0, 20.0),
+        );
+        draw_nav_icon(
+            ui.painter(),
+            icon_rect,
             icon,
-            egui::FontId::proportional(18.0),
             if selected { ACCENT } else { MUTED },
         );
         ui.painter().text(
@@ -450,6 +541,12 @@ impl ColdCatApp {
         if secondary_button(ui, "Open block builder", ui.available_width(), 38.0).clicked() {
             self.page = Page::Builder;
         }
+        if secondary_button(ui, "Open profiles", ui.available_width(), 38.0).clicked() {
+            self.page = Page::Profiles;
+        }
+        if secondary_button(ui, "Use active as draft", ui.available_width(), 38.0).clicked() {
+            self.use_active_as_draft();
+        }
         if primary_button(ui, "Start current draft", ui.available_width(), 40.0).clicked() {
             self.start_block();
         }
@@ -462,6 +559,9 @@ impl ColdCatApp {
     }
 
     fn builder(&mut self, ui: &mut egui::Ui) {
+        card(ui, |ui| self.draft_tools_card(ui));
+        ui.add_space(12.0);
+
         if ui.available_width() >= 760.0 {
             ui.columns(2, |columns| {
                 card(&mut columns[0], |ui| {
@@ -489,6 +589,24 @@ impl ColdCatApp {
             ui.add_space(12.0);
             card(ui, |ui| self.app_editor(ui));
         }
+    }
+
+    fn draft_tools_card(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Draft");
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Name");
+            ui.add(egui::TextEdit::singleline(&mut self.draft_name).desired_width(220.0));
+            if primary_button(ui, "Save profile", 122.0, 34.0).clicked() {
+                self.save_current_profile();
+            }
+            if secondary_button(ui, "Clear draft", 104.0, 34.0).clicked() {
+                self.clear_draft();
+            }
+            if secondary_button(ui, "Use active session", 146.0, 34.0).clicked() {
+                self.use_active_as_draft();
+            }
+        });
     }
 
     fn duration_card(&mut self, ui: &mut egui::Ui) {
@@ -528,6 +646,105 @@ impl ColdCatApp {
         }
         ui.add_space(8.0);
         self.message_strip(ui);
+    }
+
+    fn profiles_page(&mut self, ui: &mut egui::Ui) {
+        card(ui, |ui| {
+            ui.heading("Block profiles");
+            ui.add(
+                egui::Label::new(
+                    RichText::new(
+                        "Use built-in profiles or save your own reusable block lists and durations.",
+                    )
+                    .color(MUTED),
+                )
+                .wrap(),
+            );
+        });
+
+        ui.add_space(12.0);
+        if ui.available_width() >= 900.0 {
+            ui.columns(2, |columns| {
+                card(&mut columns[0], |ui| self.built_in_profiles_card(ui));
+                card(&mut columns[1], |ui| self.saved_profiles_card(ui));
+            });
+        } else {
+            card(ui, |ui| self.built_in_profiles_card(ui));
+            ui.add_space(12.0);
+            card(ui, |ui| self.saved_profiles_card(ui));
+        }
+    }
+
+    fn built_in_profiles_card(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Built-in presets");
+        ui.add_space(8.0);
+        for profile in built_in_profiles() {
+            profile_row(ui, &profile, false, false, |action| match action {
+                ProfileAction::Load => self.apply_profile(&profile),
+                ProfileAction::Start => {
+                    self.apply_profile(&profile);
+                    self.start_block();
+                }
+                ProfileAction::Delete => {}
+            });
+        }
+    }
+
+    fn saved_profiles_card(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Saved profiles");
+        ui.horizontal_wrapped(|ui| {
+            if primary_button(ui, "Save current draft", 156.0, 34.0).clicked() {
+                self.save_current_profile();
+            }
+            if secondary_button(ui, "Reload", 86.0, 34.0).clicked() {
+                self.profiles = load_profiles();
+                self.message = "Profiles reloaded.".to_string();
+                self.error = None;
+                self.last_action = "Reloaded profiles".to_string();
+            }
+        });
+        ui.add_space(8.0);
+
+        if self.profiles.is_empty() {
+            ui.label(RichText::new("No saved profiles yet.").color(MUTED));
+            return;
+        }
+
+        let mut delete = None;
+        for index in 0..self.profiles.len() {
+            let profile = self.profiles[index].clone();
+            let selected = self.selected_profile == Some(index);
+            profile_row(ui, &profile, selected, true, |action| match action {
+                ProfileAction::Load => {
+                    self.selected_profile = Some(index);
+                    self.apply_profile(&profile);
+                }
+                ProfileAction::Start => {
+                    self.selected_profile = Some(index);
+                    self.apply_profile(&profile);
+                    self.start_block();
+                }
+                ProfileAction::Delete => {
+                    delete = Some(index);
+                }
+            });
+        }
+
+        if let Some(index) = delete {
+            let removed = self.profiles.remove(index);
+            self.selected_profile = None;
+            match save_profiles(&self.profiles) {
+                Ok(()) => {
+                    self.message = format!("Deleted profile '{}'.", removed.name);
+                    self.error = None;
+                    self.last_action = "Deleted profile".to_string();
+                }
+                Err(err) => {
+                    self.error = Some(format!("Failed to save profiles: {err}"));
+                    self.last_action = "Delete failed".to_string();
+                }
+            }
+        }
     }
 
     fn apps_page(&mut self, ui: &mut egui::Ui) {
@@ -662,6 +879,10 @@ impl ColdCatApp {
             .wrap(),
         );
         ui.add_space(8.0);
+        ui.checkbox(
+            &mut self.auto_refresh,
+            "Auto-refresh status every 15 seconds",
+        );
         if secondary_button(ui, "Refresh status", ui.available_width(), 36.0).clicked() {
             self.refresh_status();
         }
@@ -700,7 +921,7 @@ impl ColdCatApp {
         if let Some(error) = &self.error {
             alert_box(ui, "!", "Action failed", error, ERROR_BG, ERROR);
         } else {
-            alert_box(ui, "✓", "Status", &self.message, OK_BG, OK);
+            alert_box(ui, "i", "Status", &self.message, OK_BG, OK);
         }
         ui.label(
             RichText::new(format!("Last action: {}", self.last_action))
@@ -804,6 +1025,110 @@ impl ColdCatApp {
         self.manual_app.clear();
     }
 
+    fn apply_profile(&mut self, profile: &BlockProfile) {
+        self.draft_name = profile.name.clone();
+        self.duration = profile.duration.clone();
+        self.site_rules = profile.sites.clone();
+        self.app_rules = profile.apps.clone();
+        self.message = format!("Loaded profile '{}'.", profile.name);
+        self.error = None;
+        self.last_action = "Loaded profile".to_string();
+        self.page = Page::Builder;
+    }
+
+    fn save_current_profile(&mut self) {
+        let profile = self.profile_from_current_draft();
+        if profile.sites.is_empty() && profile.apps.is_empty() {
+            self.error =
+                Some("Add at least one website or app before saving a profile.".to_string());
+            self.last_action = "Save failed".to_string();
+            return;
+        }
+
+        if parse_duration_secs(&profile.duration).is_err() {
+            self.error = Some("Fix the duration before saving this profile.".to_string());
+            self.last_action = "Save failed".to_string();
+            return;
+        }
+
+        if let Some(existing) = self
+            .profiles
+            .iter_mut()
+            .find(|existing| existing.name.eq_ignore_ascii_case(&profile.name))
+        {
+            *existing = profile.clone();
+        } else {
+            self.profiles.push(profile.clone());
+        }
+        self.profiles
+            .sort_by_key(|profile| profile.name.to_ascii_lowercase());
+
+        match save_profiles(&self.profiles) {
+            Ok(()) => {
+                self.message = format!("Saved profile '{}'.", profile.name);
+                self.error = None;
+                self.last_action = "Saved profile".to_string();
+            }
+            Err(err) => {
+                self.error = Some(format!("Failed to save profiles: {err}"));
+                self.last_action = "Save failed".to_string();
+            }
+        }
+    }
+
+    fn profile_from_current_draft(&self) -> BlockProfile {
+        let name = if self.draft_name.trim().is_empty() {
+            "New block".to_string()
+        } else {
+            self.draft_name.trim().to_string()
+        };
+
+        BlockProfile {
+            name,
+            duration: self.duration.trim().to_string(),
+            sites: self.site_rules.clone(),
+            apps: self.app_rules.clone(),
+        }
+    }
+
+    fn clear_draft(&mut self) {
+        self.draft_name = "New block".to_string();
+        self.duration = "2h".to_string();
+        self.site_rules.clear();
+        self.app_rules.clear();
+        self.manual_site.clear();
+        self.manual_app.clear();
+        self.selected_profile = None;
+        self.message = "Draft cleared.".to_string();
+        self.error = None;
+        self.last_action = "Cleared draft".to_string();
+    }
+
+    fn use_active_as_draft(&mut self) {
+        let Some(status) = &self.status else {
+            self.error =
+                Some("Refresh daemon status first; no active session is loaded.".to_string());
+            self.last_action = "Load active failed".to_string();
+            return;
+        };
+        let Some(session) = &status.active_session else {
+            self.error = Some("There is no active session to copy.".to_string());
+            self.last_action = "Load active failed".to_string();
+            return;
+        };
+
+        let now = self.status_now(status);
+        self.draft_name = "Copied active block".to_string();
+        self.duration = remaining_duration_for_draft(now, session.end_time);
+        self.site_rules = session.sites.clone();
+        self.app_rules = session.apps.clone();
+        self.selected_profile = None;
+        self.message = "Copied active session into the draft.".to_string();
+        self.error = None;
+        self.last_action = "Copied active session".to_string();
+        self.page = Page::Builder;
+    }
+
     fn scan_apps(&mut self) {
         self.app_candidates = scan_running_apps();
         self.last_app_scan = Some(Instant::now());
@@ -835,6 +1160,18 @@ impl ColdCatApp {
                 .status_fetched_at
                 .map(|instant| instant.elapsed().as_secs())
                 .unwrap_or(0)
+    }
+
+    fn maybe_auto_refresh(&mut self) {
+        if !self.auto_refresh || self.last_auto_refresh.elapsed() < Duration::from_secs(15) {
+            return;
+        }
+        self.last_auto_refresh = Instant::now();
+        self.apply_response(
+            send_command(CommandRequest::Status),
+            "Auto-refreshed status",
+            "Auto-refresh failed",
+        );
     }
 }
 
@@ -877,6 +1214,132 @@ fn card<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> 
         .inner_margin(egui::Margin::same(22.0))
         .show(ui, add_contents)
         .inner
+}
+
+fn draw_logo(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
+    let center = rect.center();
+    let radius = rect.width().min(rect.height()) * 0.36;
+    painter.circle_filled(center, radius, color);
+    let ear_y = center.y - radius * 0.65;
+    painter.line_segment(
+        [
+            egui::pos2(center.x - radius * 0.65, ear_y),
+            egui::pos2(center.x - radius * 0.25, center.y - radius * 1.25),
+        ],
+        Stroke::new(2.0, color),
+    );
+    painter.line_segment(
+        [
+            egui::pos2(center.x + radius * 0.65, ear_y),
+            egui::pos2(center.x + radius * 0.25, center.y - radius * 1.25),
+        ],
+        Stroke::new(2.0, color),
+    );
+}
+
+fn draw_nav_icon(painter: &egui::Painter, rect: egui::Rect, icon: NavIcon, color: Color32) {
+    let stroke = Stroke::new(1.8, color);
+    let c = rect.center();
+    let w = rect.width();
+    let h = rect.height();
+    let left = rect.left() + w * 0.18;
+    let right = rect.right() - w * 0.18;
+    let top = rect.top() + h * 0.18;
+    let bottom = rect.bottom() - h * 0.18;
+
+    match icon {
+        NavIcon::Dashboard => {
+            painter.line_segment([egui::pos2(left, c.y), egui::pos2(c.x, top)], stroke);
+            painter.line_segment([egui::pos2(c.x, top), egui::pos2(right, c.y)], stroke);
+            painter.rect_stroke(
+                egui::Rect::from_min_max(
+                    egui::pos2(left + 2.0, c.y),
+                    egui::pos2(right - 2.0, bottom),
+                ),
+                2.0,
+                stroke,
+            );
+        }
+        NavIcon::Builder => {
+            painter.rect_stroke(rect.shrink(3.0), 3.0, stroke);
+            painter.line_segment(
+                [
+                    egui::pos2(left + 2.0, c.y),
+                    egui::pos2(c.x - 1.0, bottom - 2.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 1.0, bottom - 2.0),
+                    egui::pos2(right - 1.0, top + 3.0),
+                ],
+                stroke,
+            );
+        }
+        NavIcon::Profiles => {
+            painter.rect_stroke(
+                egui::Rect::from_min_max(egui::pos2(left + 2.0, top), egui::pos2(right, bottom)),
+                2.0,
+                stroke,
+            );
+            painter.line_segment(
+                [egui::pos2(left, top + 3.0), egui::pos2(left, bottom + 2.0)],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(left, bottom + 2.0),
+                    egui::pos2(right - 3.0, bottom + 2.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [egui::pos2(left + 6.0, c.y), egui::pos2(right - 4.0, c.y)],
+                stroke,
+            );
+        }
+        NavIcon::Apps => {
+            painter.rect_stroke(rect.shrink(4.0), 4.0, stroke);
+            painter.line_segment(
+                [egui::pos2(c.x, top - 1.0), egui::pos2(c.x, top - 5.0)],
+                stroke,
+            );
+            painter.line_segment(
+                [egui::pos2(c.x, bottom + 1.0), egui::pos2(c.x, bottom + 5.0)],
+                stroke,
+            );
+            painter.line_segment(
+                [egui::pos2(left - 5.0, c.y), egui::pos2(left - 1.0, c.y)],
+                stroke,
+            );
+            painter.line_segment(
+                [egui::pos2(right + 1.0, c.y), egui::pos2(right + 5.0, c.y)],
+                stroke,
+            );
+            painter.circle_filled(c, 2.4, color);
+        }
+        NavIcon::Sites => {
+            painter.circle_stroke(c, w.min(h) * 0.34, stroke);
+            painter.line_segment([egui::pos2(left, c.y), egui::pos2(right, c.y)], stroke);
+            painter.line_segment([egui::pos2(c.x, top), egui::pos2(c.x, bottom)], stroke);
+            painter.circle_stroke(c, w.min(h) * 0.18, stroke);
+        }
+        NavIcon::Settings => {
+            painter.circle_stroke(c, w.min(h) * 0.30, stroke);
+            painter.circle_stroke(c, w.min(h) * 0.11, stroke);
+            for angle in [
+                0.0_f32,
+                std::f32::consts::FRAC_PI_2,
+                std::f32::consts::PI,
+                std::f32::consts::PI + std::f32::consts::FRAC_PI_2,
+            ] {
+                let outer = egui::pos2(c.x + angle.cos() * w * 0.43, c.y + angle.sin() * h * 0.43);
+                let inner = egui::pos2(c.x + angle.cos() * w * 0.32, c.y + angle.sin() * h * 0.32);
+                painter.line_segment([inner, outer], stroke);
+            }
+        }
+    }
 }
 
 fn primary_button(ui: &mut egui::Ui, label: &str, width: f32, height: f32) -> egui::Response {
@@ -1079,6 +1542,94 @@ fn security_model_card(ui: &mut egui::Ui) {
     );
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProfileAction {
+    Load,
+    Start,
+    Delete,
+}
+
+fn profile_row(
+    ui: &mut egui::Ui,
+    profile: &BlockProfile,
+    selected: bool,
+    can_delete: bool,
+    mut action: impl FnMut(ProfileAction),
+) {
+    egui::Frame::default()
+        .fill(if selected {
+            CARD_ALT
+        } else {
+            Color32::from_rgb(248, 250, 252)
+        })
+        .stroke(Stroke::new(1.0, BORDER))
+        .rounding(10.0)
+        .inner_margin(egui::Margin::same(14.0))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(&profile.name).strong().color(TEXT));
+                    ui.label(
+                        RichText::new(format!(
+                            "{} • {} sites • {} apps",
+                            profile.duration,
+                            profile.sites.len(),
+                            profile.apps.len()
+                        ))
+                        .small()
+                        .color(MUTED),
+                    );
+                });
+                if secondary_button(ui, "Load", 70.0, 30.0).clicked() {
+                    action(ProfileAction::Load);
+                }
+                if primary_button(ui, "Start", 70.0, 30.0).clicked() {
+                    action(ProfileAction::Start);
+                }
+                if can_delete && danger_button(ui, "Delete", 78.0, 30.0).clicked() {
+                    action(ProfileAction::Delete);
+                }
+            });
+            if !profile.sites.is_empty() || !profile.apps.is_empty() {
+                ui.add_space(6.0);
+                ui.add(
+                    egui::Label::new(RichText::new(profile_preview(profile)).small().color(MUTED))
+                        .wrap(),
+                );
+            }
+        });
+    ui.add_space(8.0);
+}
+
+fn profile_preview(profile: &BlockProfile) -> String {
+    let mut parts = Vec::new();
+    if !profile.sites.is_empty() {
+        parts.push(format!(
+            "Sites: {}",
+            profile
+                .sites
+                .iter()
+                .take(4)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !profile.apps.is_empty() {
+        parts.push(format!(
+            "Apps: {}",
+            profile
+                .apps
+                .iter()
+                .take(4)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    parts.join(" | ")
+}
+
 fn scan_running_apps() -> Vec<AppCandidate> {
     let mut system = System::new_all();
     system.refresh_processes();
@@ -1265,6 +1816,54 @@ fn merge_candidates(existing: &mut Vec<AppCandidate>, incoming: Vec<AppCandidate
     *existing = by_rule.into_values().collect();
 }
 
+fn profiles_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                env::var_os("USERPROFILE")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("AppData")
+                    .join("Roaming")
+            })
+            .join("ColdCat")
+            .join("profiles.json")
+    }
+
+    #[cfg(not(windows))]
+    {
+        env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".config")
+            })
+            .join("cold-cat")
+            .join("profiles.json")
+    }
+}
+
+fn load_profiles() -> Vec<BlockProfile> {
+    let path = profiles_path();
+    let Ok(content) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&content).unwrap_or_default()
+}
+
+fn save_profiles(profiles: &[BlockProfile]) -> Result<(), String> {
+    let path = profiles_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(profiles).map_err(|err| err.to_string())?;
+    fs::write(path, content).map_err(|err| err.to_string())
+}
+
 fn display_name_for_process(name: &str, exe: &Path) -> String {
     exe.file_stem()
         .and_then(|value| value.to_str())
@@ -1311,6 +1910,7 @@ fn page_title(page: Page) -> &'static str {
     match page {
         Page::Dashboard => "Dashboard",
         Page::Builder => "Block Builder",
+        Page::Profiles => "Profiles",
         Page::Apps => "Apps",
         Page::Sites => "Websites",
         Page::Settings => "Settings",
@@ -1321,6 +1921,7 @@ fn page_subtitle(page: Page) -> &'static str {
     match page {
         Page::Dashboard => "See the active block and your next draft at a glance.",
         Page::Builder => "Set duration, review selected rules, and start an enforced session.",
+        Page::Profiles => "Load built-in presets or save reusable block profiles.",
         Page::Apps => "Select running apps instead of typing process names by hand.",
         Page::Sites => "Use presets or build a custom website block list.",
         Page::Settings => "Daemon status, recovery, and security notes.",
@@ -1370,6 +1971,17 @@ fn remaining_label(now: u64, end_time: u64) -> String {
     }
 }
 
+fn remaining_duration_for_draft(now: u64, end_time: u64) -> String {
+    let remaining = end_time.saturating_sub(now).max(60);
+    if remaining.is_multiple_of(3600) {
+        format!("{}h", remaining / 3600)
+    } else if remaining.is_multiple_of(60) {
+        format!("{}m", remaining / 60)
+    } else {
+        format!("{remaining}s")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1395,5 +2007,27 @@ mod tests {
         assert_eq!(remaining_label(100, 100), "expired");
         assert_eq!(remaining_label(100, 145), "45s");
         assert_eq!(remaining_label(100, 3_800), "1h 1m");
+    }
+
+    #[test]
+    fn formats_active_session_as_startable_duration() {
+        assert_eq!(remaining_duration_for_draft(100, 100), "1m");
+        assert_eq!(remaining_duration_for_draft(100, 3_700), "1h");
+        assert_eq!(remaining_duration_for_draft(100, 1_900), "30m");
+    }
+
+    #[test]
+    fn builds_profile_previews() {
+        let profile = BlockProfile {
+            name: "Focus".to_string(),
+            duration: "2h".to_string(),
+            sites: vec!["reddit.com".to_string(), "youtube.com".to_string()],
+            apps: vec!["discord.exe".to_string()],
+        };
+
+        assert_eq!(
+            profile_preview(&profile),
+            "Sites: reddit.com, youtube.com | Apps: discord.exe"
+        );
     }
 }
