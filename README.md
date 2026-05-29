@@ -28,14 +28,15 @@ The main binaries are:
 
 The GUI provides a Cold Turkey-style workflow without copying its exact visual design:
 
-- modern dark app shell with sidebar navigation
+- clean neutral light app shell with icon sidebar navigation
 - dashboard cards for active session state, draft counts, and quick actions
 - duration entry with quick buttons for common session lengths
 - website category presets for social, video, gaming, shopping, and news
 - removable website and application rule cards
 - app picker that scans running processes and installed Windows applications
 - search over discovered apps plus manual executable/name entry
-- a prominent **Start enforced block** action
+- solid primary-action buttons, including a prominent **Start enforced block** action
+- styled success/error alert boxes instead of raw terminal-like messages
 - live daemon/session status with progress and countdown
 - visible start time, end timestamp, remaining time, and blocked counts
 - post-expiry recovery action

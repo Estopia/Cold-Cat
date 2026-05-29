@@ -7,19 +7,22 @@ use std::time::Instant;
 use coldcat_core::client::send_command;
 use coldcat_core::duration::parse_duration_secs;
 use coldcat_core::protocol::{CommandRequest, CommandResponse, ServiceState, ServiceStatus};
-use eframe::egui::{self, Color32, RichText, Stroke};
+use eframe::egui::{self, epaint::Shadow, Color32, RichText, Stroke};
 use sysinfo::{ProcessExt, System, SystemExt};
 
-const ACCENT: Color32 = Color32::from_rgb(87, 166, 255);
-const ACCENT_2: Color32 = Color32::from_rgb(94, 234, 212);
-const BG: Color32 = Color32::from_rgb(10, 14, 24);
-const PANEL: Color32 = Color32::from_rgb(17, 24, 39);
-const CARD: Color32 = Color32::from_rgb(24, 34, 52);
-const CARD_ALT: Color32 = Color32::from_rgb(31, 41, 61);
-const BORDER: Color32 = Color32::from_rgb(55, 68, 92);
-const MUTED: Color32 = Color32::from_rgb(156, 171, 194);
-const ERROR: Color32 = Color32::from_rgb(255, 120, 120);
-const OK: Color32 = Color32::from_rgb(132, 255, 180);
+const TEXT: Color32 = Color32::from_rgb(17, 24, 39);
+const ACCENT: Color32 = Color32::from_rgb(37, 99, 235);
+const ACCENT_DARK: Color32 = Color32::from_rgb(29, 78, 216);
+const BG: Color32 = Color32::from_rgb(246, 247, 249);
+const PANEL: Color32 = Color32::from_rgb(255, 255, 255);
+const CARD: Color32 = Color32::from_rgb(255, 255, 255);
+const CARD_ALT: Color32 = Color32::from_rgb(239, 246, 255);
+const BORDER: Color32 = Color32::from_rgb(229, 231, 235);
+const MUTED: Color32 = Color32::from_rgb(100, 116, 139);
+const ERROR: Color32 = Color32::from_rgb(180, 35, 24);
+const ERROR_BG: Color32 = Color32::from_rgb(254, 243, 242);
+const OK: Color32 = Color32::from_rgb(21, 128, 61);
+const OK_BG: Color32 = Color32::from_rgb(236, 253, 245);
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -208,17 +211,18 @@ impl eframe::App for ColdCatApp {
 
 impl ColdCatApp {
     fn sidebar(&mut self, ui: &mut egui::Ui) {
-        ui.vertical_centered(|ui| {
-            ui.heading(RichText::new("Cold Cat").size(30.0).color(ACCENT_2));
-            ui.label(RichText::new("Enforced focus").color(MUTED));
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("●").size(24.0).color(ACCENT));
+            ui.heading(RichText::new("Cold Cat").size(26.0).color(TEXT));
         });
-        ui.add_space(28.0);
+        ui.label(RichText::new("Enforced focus").color(MUTED));
+        ui.add_space(30.0);
 
-        self.nav_button(ui, Page::Dashboard, "Dashboard", "Current session");
-        self.nav_button(ui, Page::Builder, "Block Builder", "Start a session");
-        self.nav_button(ui, Page::Apps, "Apps", "Pick processes");
-        self.nav_button(ui, Page::Sites, "Websites", "Categories and lists");
-        self.nav_button(ui, Page::Settings, "Settings", "Daemon and recovery");
+        self.nav_button(ui, Page::Dashboard, "⌂", "Dashboard");
+        self.nav_button(ui, Page::Builder, "□", "Block Builder");
+        self.nav_button(ui, Page::Apps, "◉", "Apps");
+        self.nav_button(ui, Page::Sites, "◎", "Websites");
+        self.nav_button(ui, Page::Settings, "⚙", "Settings");
 
         ui.add_space(28.0);
         card(ui, |ui| {
@@ -234,11 +238,11 @@ impl ColdCatApp {
         });
     }
 
-    fn nav_button(&mut self, ui: &mut egui::Ui, page: Page, title: &str, subtitle: &str) {
+    fn nav_button(&mut self, ui: &mut egui::Ui, page: Page, icon: &str, title: &str) {
         let selected = self.page == page;
         let width = ui.available_width().max(1.0);
         let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(width, 62.0), egui::Sense::click());
+            ui.allocate_exact_size(egui::vec2(width, 48.0), egui::Sense::click());
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
 
         if response.clicked() {
@@ -248,30 +252,32 @@ impl ColdCatApp {
         let fill = if selected {
             CARD_ALT
         } else if response.hovered() {
-            Color32::from_rgb(28, 39, 59)
+            Color32::from_rgb(248, 250, 252)
         } else {
             PANEL
         };
-        let stroke = if selected {
-            Stroke::new(1.5, ACCENT)
-        } else {
-            Stroke::new(1.0, Color32::TRANSPARENT)
-        };
 
-        ui.painter().rect(rect, 12.0, fill, stroke);
+        ui.painter().rect_filled(rect, 9.0, fill);
+        if selected {
+            let bar = egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.top() + 9.0),
+                egui::vec2(4.0, rect.height() - 18.0),
+            );
+            ui.painter().rect_filled(bar, 2.0, ACCENT);
+        }
         ui.painter().text(
-            rect.left_top() + egui::vec2(14.0, 12.0),
+            rect.left_top() + egui::vec2(18.0, 14.0),
             egui::Align2::LEFT_TOP,
-            title,
-            egui::FontId::proportional(17.0),
-            if selected { ACCENT } else { Color32::WHITE },
+            icon,
+            egui::FontId::proportional(18.0),
+            if selected { ACCENT } else { MUTED },
         );
         ui.painter().text(
-            rect.left_top() + egui::vec2(14.0, 36.0),
+            rect.left_top() + egui::vec2(50.0, 14.0),
             egui::Align2::LEFT_TOP,
-            subtitle,
-            egui::FontId::proportional(13.0),
-            MUTED,
+            title,
+            egui::FontId::proportional(16.0),
+            if selected { ACCENT_DARK } else { TEXT },
         );
         ui.add_space(8.0);
     }
@@ -287,7 +293,7 @@ impl ColdCatApp {
                     );
                 });
                 ui.separator();
-                if ui.button("Refresh daemon").clicked() {
+                if secondary_button(ui, "Refresh daemon", 140.0, 34.0).clicked() {
                     self.refresh_status();
                 }
                 let state = self
@@ -395,7 +401,14 @@ impl ColdCatApp {
                             .strong(),
                     );
                     if status.tampered_state {
-                        ui.colored_label(ERROR, "Tampered state");
+                        alert_box(
+                            ui,
+                            "!",
+                            "Tampered state",
+                            "Sealed state validation failed. Administrator recovery is required.",
+                            ERROR_BG,
+                            ERROR,
+                        );
                     }
                 });
 
@@ -422,7 +435,7 @@ impl ColdCatApp {
             None => {
                 ui.label("Daemon status has not been loaded.");
                 ui.add_space(8.0);
-                if ui.button("Check daemon now").clicked() {
+                if secondary_button(ui, "Check daemon now", ui.available_width(), 36.0).clicked() {
                     self.refresh_status();
                 }
             }
@@ -434,31 +447,13 @@ impl ColdCatApp {
         ui.label(RichText::new("Build, start, or recover a session.").color(MUTED));
         ui.add_space(12.0);
 
-        if ui
-            .add(
-                egui::Button::new("Open block builder")
-                    .min_size(egui::vec2(ui.available_width(), 38.0)),
-            )
-            .clicked()
-        {
+        if secondary_button(ui, "Open block builder", ui.available_width(), 38.0).clicked() {
             self.page = Page::Builder;
         }
-        if ui
-            .add(
-                egui::Button::new("Start current draft")
-                    .min_size(egui::vec2(ui.available_width(), 38.0)),
-            )
-            .clicked()
-        {
+        if primary_button(ui, "Start current draft", ui.available_width(), 40.0).clicked() {
             self.start_block();
         }
-        if ui
-            .add(
-                egui::Button::new("Recover after expiry")
-                    .min_size(egui::vec2(ui.available_width(), 38.0)),
-            )
-            .clicked()
-        {
+        if danger_button(ui, "Recover after expiry", ui.available_width(), 38.0).clicked() {
             self.recover();
         }
 
@@ -511,7 +506,7 @@ impl ColdCatApp {
         });
         ui.horizontal_wrapped(|ui| {
             for quick in ["25m", "30m", "1h", "2h", "4h", "8h"] {
-                if ui.button(quick).clicked() {
+                if secondary_button(ui, quick, 58.0, 30.0).clicked() {
                     self.duration = quick.to_string();
                 }
             }
@@ -528,13 +523,7 @@ impl ColdCatApp {
             .wrap(),
         );
         ui.add_space(12.0);
-        if ui
-            .add(
-                egui::Button::new("Start enforced block")
-                    .min_size(egui::vec2(ui.available_width(), 46.0)),
-            )
-            .clicked()
-        {
+        if primary_button(ui, "Start enforced block", ui.available_width(), 46.0).clicked() {
             self.start_block();
         }
         ui.add_space(8.0);
@@ -545,10 +534,10 @@ impl ColdCatApp {
         card(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.heading("App picker");
-                if ui.button("Scan running apps").clicked() {
+                if secondary_button(ui, "Scan running apps", 150.0, 34.0).clicked() {
                     self.scan_apps();
                 }
-                if ui.button("Scan installed apps").clicked() {
+                if secondary_button(ui, "Scan installed apps", 150.0, 34.0).clicked() {
                     self.scan_installed_apps();
                 }
                 if let Some(scan) = self.last_app_scan {
@@ -673,10 +662,10 @@ impl ColdCatApp {
             .wrap(),
         );
         ui.add_space(8.0);
-        if ui.button("Refresh status").clicked() {
+        if secondary_button(ui, "Refresh status", ui.available_width(), 36.0).clicked() {
             self.refresh_status();
         }
-        if ui.button("Recover after expiry").clicked() {
+        if danger_button(ui, "Recover after expiry", ui.available_width(), 36.0).clicked() {
             self.recover();
         }
         ui.add_space(8.0);
@@ -687,7 +676,7 @@ impl ColdCatApp {
         ui.heading("Selected websites");
         ui.horizontal(|ui| {
             ui.text_edit_singleline(&mut self.manual_site);
-            if ui.button("Add site").clicked() {
+            if secondary_button(ui, "Add site", 96.0, 30.0).clicked() {
                 self.add_manual_sites();
             }
         });
@@ -699,7 +688,7 @@ impl ColdCatApp {
         ui.heading("Selected apps");
         ui.horizontal(|ui| {
             ui.text_edit_singleline(&mut self.manual_app);
-            if ui.button("Add app").clicked() {
+            if secondary_button(ui, "Add app", 96.0, 30.0).clicked() {
                 self.add_manual_apps();
             }
         });
@@ -709,9 +698,9 @@ impl ColdCatApp {
 
     fn message_strip(&self, ui: &mut egui::Ui) {
         if let Some(error) = &self.error {
-            ui.colored_label(ERROR, error);
+            alert_box(ui, "!", "Action failed", error, ERROR_BG, ERROR);
         } else {
-            ui.colored_label(OK, &self.message);
+            alert_box(ui, "✓", "Status", &self.message, OK_BG, OK);
         }
         ui.label(
             RichText::new(format!("Last action: {}", self.last_action))
@@ -851,33 +840,103 @@ impl ColdCatApp {
 
 fn apply_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
-    style.visuals = egui::Visuals::dark();
-    style.visuals.override_text_color = Some(Color32::from_rgb(238, 244, 255));
+    style.visuals = egui::Visuals::light();
+    style.visuals.override_text_color = Some(TEXT);
     style.visuals.panel_fill = BG;
-    style.visuals.window_fill = PANEL;
+    style.visuals.window_fill = CARD;
     style.visuals.widgets.active.bg_fill = ACCENT;
-    style.visuals.widgets.hovered.bg_fill = CARD_ALT;
-    style.visuals.widgets.inactive.bg_fill = CARD;
+    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(239, 246, 255);
+    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(248, 250, 252);
+    style.visuals.widgets.noninteractive.bg_fill = CARD;
     style.visuals.selection.bg_fill = ACCENT;
-    style.spacing.item_spacing = egui::vec2(10.0, 10.0);
-    style.spacing.button_padding = egui::vec2(12.0, 8.0);
+    style.spacing.item_spacing = egui::vec2(12.0, 12.0);
+    style.spacing.button_padding = egui::vec2(14.0, 9.0);
+    style
+        .text_styles
+        .insert(egui::TextStyle::Body, egui::FontId::proportional(15.5));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Button, egui::FontId::proportional(15.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Heading, egui::FontId::proportional(24.0));
     ctx.set_style(style);
 }
 
 fn card<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
     egui::Frame::default()
         .fill(CARD)
-        .stroke(Stroke::new(1.0, BORDER))
-        .rounding(16.0)
-        .inner_margin(egui::Margin::same(16.0))
+        .stroke(Stroke::new(1.0, Color32::from_rgb(238, 242, 247)))
+        .shadow(Shadow {
+            offset: egui::vec2(0.0, 2.0),
+            blur: 10.0,
+            spread: 0.0,
+            color: Color32::from_rgba_premultiplied(15, 23, 42, 18),
+        })
+        .rounding(12.0)
+        .inner_margin(egui::Margin::same(22.0))
         .show(ui, add_contents)
         .inner
+}
+
+fn primary_button(ui: &mut egui::Ui, label: &str, width: f32, height: f32) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(label).strong().color(Color32::WHITE))
+            .fill(ACCENT)
+            .stroke(Stroke::new(1.0, ACCENT_DARK))
+            .rounding(8.0)
+            .min_size(egui::vec2(width, height)),
+    )
+}
+
+fn secondary_button(ui: &mut egui::Ui, label: &str, width: f32, height: f32) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(label).strong().color(TEXT))
+            .fill(Color32::from_rgb(248, 250, 252))
+            .stroke(Stroke::new(1.0, BORDER))
+            .rounding(8.0)
+            .min_size(egui::vec2(width, height)),
+    )
+}
+
+fn danger_button(ui: &mut egui::Ui, label: &str, width: f32, height: f32) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(label).strong().color(Color32::WHITE))
+            .fill(ERROR)
+            .stroke(Stroke::new(1.0, Color32::from_rgb(145, 32, 24)))
+            .rounding(8.0)
+            .min_size(egui::vec2(width, height)),
+    )
+}
+
+fn alert_box(
+    ui: &mut egui::Ui,
+    icon: &str,
+    title: &str,
+    body: &str,
+    fill: Color32,
+    color: Color32,
+) {
+    egui::Frame::default()
+        .fill(fill)
+        .stroke(Stroke::new(1.0, color.gamma_multiply(0.35)))
+        .rounding(10.0)
+        .inner_margin(egui::Margin::symmetric(14.0, 11.0))
+        .show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.label(RichText::new(icon).strong().color(color));
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(title).strong().color(color));
+                    ui.add(egui::Label::new(RichText::new(body).color(TEXT)).wrap());
+                });
+            });
+        });
 }
 
 fn metric_card<T: std::fmt::Display>(ui: &mut egui::Ui, title: &str, value: T, subtitle: &str) {
     card(ui, |ui| {
         ui.label(RichText::new(title).color(MUTED));
-        ui.heading(RichText::new(value.to_string()).size(30.0).color(ACCENT_2));
+        ui.heading(RichText::new(value.to_string()).size(30.0).color(ACCENT));
         ui.label(RichText::new(subtitle).small().color(MUTED));
     });
 }
@@ -917,7 +976,21 @@ fn removable_rules(ui: &mut egui::Ui, rules: &mut Vec<String>) {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if ui.small_button("Remove").clicked() {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                RichText::new("Remove").color(ERROR).strong(),
+                                            )
+                                            .fill(Color32::from_rgb(255, 251, 250))
+                                            .stroke(Stroke::new(
+                                                1.0,
+                                                Color32::from_rgb(253, 162, 155),
+                                            ))
+                                            .rounding(7.0)
+                                            .min_size(egui::vec2(74.0, 26.0)),
+                                        )
+                                        .clicked()
+                                    {
                                         remove = Some(index);
                                     }
                                 },
@@ -955,7 +1028,7 @@ fn app_candidate_row(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if already_selected {
                         ui.label(RichText::new("Added").color(OK));
-                    } else if ui.button("Add").clicked() {
+                    } else if secondary_button(ui, "Add", 62.0, 30.0).clicked() {
                         add(candidate.rule.clone());
                     }
                 });
@@ -968,9 +1041,9 @@ fn category_card(ui: &mut egui::Ui, category: &SiteCategory) -> bool {
     let mut clicked = false;
     egui::Frame::default()
         .fill(CARD)
-        .stroke(Stroke::new(1.0, BORDER))
-        .rounding(16.0)
-        .inner_margin(egui::Margin::same(16.0))
+        .stroke(Stroke::new(1.0, Color32::from_rgb(238, 242, 247)))
+        .rounding(12.0)
+        .inner_margin(egui::Margin::same(20.0))
         .show(ui, |ui| {
             ui.heading(category.name);
             ui.add(egui::Label::new(RichText::new(category.subtitle).color(MUTED)).wrap());
@@ -984,7 +1057,7 @@ fn category_card(ui: &mut egui::Ui, category: &SiteCategory) -> bool {
                 .wrap(),
             );
             ui.add_space(8.0);
-            if ui.button("Add category").clicked() {
+            if secondary_button(ui, "Add category", 128.0, 32.0).clicked() {
                 clicked = true;
             }
         });
@@ -1265,7 +1338,7 @@ fn state_label(state: &ServiceState) -> &'static str {
 
 fn status_color(status: Option<&ServiceStatus>) -> Color32 {
     match status.map(|status| &status.state) {
-        Some(ServiceState::Active) => ACCENT_2,
+        Some(ServiceState::Active) => ACCENT,
         Some(ServiceState::Idle) => OK,
         Some(ServiceState::ExpiredNeedsRecovery) => Color32::YELLOW,
         Some(ServiceState::Tampered) => ERROR,
