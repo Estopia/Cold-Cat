@@ -16,8 +16,12 @@ pub enum ColdCatError {
     MalformedHostsBlock,
     #[error("system clock is before the Unix epoch")]
     SystemTime,
+    #[error("I/O failed: {0}")]
+    Io(String),
     #[error("serialization failed: {0}")]
     Serialization(String),
+    #[error("daemon protocol failed: {0}")]
+    Protocol(String),
     #[error("cryptographic operation failed")]
     Crypto,
 }
@@ -25,6 +29,12 @@ pub enum ColdCatError {
 impl From<serde_json::Error> for ColdCatError {
     fn from(value: serde_json::Error) -> Self {
         Self::Serialization(value.to_string())
+    }
+}
+
+impl From<std::io::Error> for ColdCatError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value.to_string())
     }
 }
 

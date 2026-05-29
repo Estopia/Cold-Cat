@@ -1,9 +1,6 @@
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
-
-use anyhow::{anyhow, Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
+use coldcat_core::client::send_command;
 use coldcat_core::duration::parse_duration_secs;
 use coldcat_core::protocol::{CommandRequest, CommandResponse, ServiceState};
 use coldcat_core::DEFAULT_DAEMON_ADDR;
@@ -47,7 +44,7 @@ fn main() -> Result<()> {
             sites,
             apps,
         } => {
-            let response = send(CommandRequest::Start {
+            let response = send_command(CommandRequest::Start {
                 duration_secs: duration,
                 sites,
                 apps,
@@ -56,12 +53,12 @@ fn main() -> Result<()> {
             exit_for_response(response);
         }
         Command::Status => {
-            let response = send(CommandRequest::Status)?;
+            let response = send_command(CommandRequest::Status)?;
             print_response(&response);
             exit_for_response(response);
         }
         Command::Recover => {
-            let response = send(CommandRequest::Recover)?;
+            let response = send_command(CommandRequest::Recover)?;
             print_response(&response);
             exit_for_response(response);
         }
@@ -71,26 +68,6 @@ fn main() -> Result<()> {
 
 fn parse_duration(input: &str) -> std::result::Result<u64, String> {
     parse_duration_secs(input).map_err(|err| err.to_string())
-}
-
-fn send(request: CommandRequest) -> Result<CommandResponse> {
-    let addr = DEFAULT_DAEMON_ADDR
-        .to_socket_addrs()
-        .context("resolving daemon address")?
-        .next()
-        .ok_or_else(|| anyhow!("no daemon address resolved"))?;
-
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
-        .with_context(|| format!("connecting to daemon at {DEFAULT_DAEMON_ADDR}"))?;
-    serde_json::to_writer(&mut stream, &request).context("encoding request")?;
-    stream.write_all(b"\n").context("sending request")?;
-
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .context("reading daemon response")?;
-    serde_json::from_str(&line).context("decoding daemon response")
 }
 
 fn print_response(response: &CommandResponse) {
@@ -135,7 +112,7 @@ fn doctor() -> Result<()> {
     println!("key_file: {}", paths.key_file.display());
     println!("hosts_file: {}", paths.hosts_file.display());
 
-    match send(CommandRequest::Status) {
+    match send_command(CommandRequest::Status) {
         Ok(response) => {
             println!("daemon: reachable");
             print_response(&response);
