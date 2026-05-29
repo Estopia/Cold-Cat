@@ -174,7 +174,11 @@ impl Engine {
             }
         };
 
-        if self.active_sessions.iter().any(|s| s.name == name && s.is_active_at(now)) {
+        if self
+            .active_sessions
+            .iter()
+            .any(|s| s.name == name && s.is_active_at(now))
+        {
             return CommandResponse::error(
                 "this block session is already active; refusing to overwrite it before expiry",
                 Some(self.status()),
@@ -197,8 +201,16 @@ impl Engine {
         }
         self.can_stop.store(false, Ordering::SeqCst);
 
-        let all_sites: Vec<String> = self.active_sessions.iter().flat_map(|s| s.sites.clone()).collect();
-        let all_apps: Vec<String> = self.active_sessions.iter().flat_map(|s| s.apps.clone()).collect();
+        let all_sites: Vec<String> = self
+            .active_sessions
+            .iter()
+            .flat_map(|s| s.sites.clone())
+            .collect();
+        let all_apps: Vec<String> = self
+            .active_sessions
+            .iter()
+            .flat_map(|s| s.apps.clone())
+            .collect();
 
         if let Err(err) = self.enforcer.apply_hosts(&all_sites) {
             return CommandResponse::error(
@@ -240,7 +252,11 @@ impl Engine {
             }
         };
 
-        if self.active_sessions.iter().any(|session| session.is_active_at(now)) {
+        if self
+            .active_sessions
+            .iter()
+            .any(|session| session.is_active_at(now))
+        {
             return CommandResponse::error(
                 "recover is refused while an enforced session is still active",
                 Some(self.status()),
@@ -264,8 +280,16 @@ impl Engine {
         self.cleanup_if_expired()?;
         if !self.active_sessions.is_empty() {
             self.can_stop.store(false, Ordering::SeqCst);
-            let all_sites: Vec<String> = self.active_sessions.iter().flat_map(|s| s.sites.clone()).collect();
-            let all_apps: Vec<String> = self.active_sessions.iter().flat_map(|s| s.apps.clone()).collect();
+            let all_sites: Vec<String> = self
+                .active_sessions
+                .iter()
+                .flat_map(|s| s.sites.clone())
+                .collect();
+            let all_apps: Vec<String> = self
+                .active_sessions
+                .iter()
+                .flat_map(|s| s.apps.clone())
+                .collect();
             self.enforcer.apply_hosts(&all_sites)?;
             self.enforcer.enforce_apps(&all_apps)?;
         }
@@ -275,7 +299,8 @@ impl Engine {
     fn cleanup_if_expired(&mut self) -> Result<()> {
         let now = now_unix()?;
         let initial_len = self.active_sessions.len();
-        self.active_sessions.retain(|session| session.is_active_at(now));
+        self.active_sessions
+            .retain(|session| session.is_active_at(now));
 
         if self.active_sessions.len() != initial_len {
             if self.active_sessions.is_empty() {
@@ -298,7 +323,7 @@ impl Engine {
     fn status(&self) -> ServiceStatus {
         let now = now_unix().unwrap_or(0);
         let has_active = self.active_sessions.iter().any(|s| s.is_active_at(now));
-        
+
         let state = if self.tampered_state {
             ServiceState::Tampered
         } else if has_active {
