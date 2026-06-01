@@ -6,9 +6,9 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use coldcat_core::daemon_addr;
 use coldcat_core::protocol::{CommandRequest, CommandResponse, ServiceState, ServiceStatus};
 use coldcat_core::session::{now_unix, ActiveSession};
-use coldcat_core::DEFAULT_DAEMON_ADDR;
 use coldcat_platform::{PlatformPaths, StateStore, SystemEnforcer};
 
 pub fn run_console() -> Result<()> {
@@ -42,12 +42,13 @@ pub fn run_with_shutdown(shutdown: Arc<AtomicBool>, can_stop: Arc<AtomicBool>) -
         }
     });
 
-    let listener = TcpListener::bind(DEFAULT_DAEMON_ADDR)
-        .with_context(|| format!("binding daemon listener at {DEFAULT_DAEMON_ADDR}"))?;
+    let daemon_addr = daemon_addr();
+    let listener = TcpListener::bind(&daemon_addr)
+        .with_context(|| format!("binding daemon listener at {daemon_addr}"))?;
     listener
         .set_nonblocking(true)
         .context("setting listener nonblocking")?;
-    eprintln!("coldcat-daemon listening on {DEFAULT_DAEMON_ADDR}");
+    eprintln!("coldcat-daemon listening on {daemon_addr}");
 
     while !shutdown.load(Ordering::SeqCst) {
         match listener.accept() {

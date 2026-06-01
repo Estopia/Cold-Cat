@@ -3,10 +3,11 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use crate::protocol::{CommandRequest, CommandResponse};
-use crate::{ColdCatError, Result, DEFAULT_DAEMON_ADDR};
+use crate::{daemon_addr, ColdCatError, Result};
 
 pub fn send_command(request: CommandRequest) -> Result<CommandResponse> {
-    send_command_to(DEFAULT_DAEMON_ADDR, request, Duration::from_secs(2))
+    let address = daemon_addr();
+    send_command_to(&address, request, Duration::from_secs(2))
 }
 
 pub fn send_command_to(

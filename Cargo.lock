@@ -772,6 +772,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "coldcat-dev"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "coldcat-core",
+ "coldcat-platform",
+]
+
+[[package]]
 name = "coldcat-gui"
 version = "0.1.0"
 dependencies = [

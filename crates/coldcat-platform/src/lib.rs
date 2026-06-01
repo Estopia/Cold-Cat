@@ -1,23 +1,31 @@
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(any(windows, target_os = "linux"))]
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-#[cfg(windows)]
-use std::env;
-
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
+#[cfg(any(windows, target_os = "linux"))]
+use anyhow::bail;
 use coldcat_core::apps::{
-    desktop_app_from_content, desktop_app_matches_query, normalize_app_rule, process_matches_rule,
-    DesktopApp, ProcessRecord,
+    desktop_app_matches_query, normalize_app_rule, process_matches_rule, DesktopApp,
+    ProcessRecord,
 };
+#[cfg(target_os = "linux")]
+use coldcat_core::apps::desktop_app_from_content;
 use coldcat_core::hosts::{apply_hosts_block, strip_managed_block};
 use coldcat_core::session::ActiveSession;
 use coldcat_core::state::{
     decode_key, encode_key, generate_key, open_session, seal_session, SealedSession,
 };
 use sysinfo::{ProcessExt, Signal, System, SystemExt};
+
+pub const DATA_DIR_ENV: &str = "COLDCAT_DATA_DIR";
+pub const CONFIG_DIR_ENV: &str = "COLDCAT_CONFIG_DIR";
+pub const RUNTIME_DIR_ENV: &str = "COLDCAT_RUNTIME_DIR";
+pub const HOSTS_FILE_ENV: &str = "COLDCAT_HOSTS_FILE";
 
 #[derive(Debug, Clone)]
 pub struct PlatformPaths {
@@ -33,26 +41,46 @@ pub struct PlatformPaths {
 
 impl PlatformPaths {
     pub fn detect() -> Self {
-        let data_dir = default_data_dir();
-        let config_dir = default_config_dir();
-        let runtime_dir = default_runtime_dir(&data_dir);
+        detect_with_overrides(
+            env_path(DATA_DIR_ENV),
+            env_path(CONFIG_DIR_ENV),
+            env_path(RUNTIME_DIR_ENV),
+            env_path(HOSTS_FILE_ENV),
+        )
+    }
+}
+
+fn detect_with_overrides(
+    data_dir: Option<PathBuf>,
+    config_dir: Option<PathBuf>,
+    runtime_dir: Option<PathBuf>,
+    hosts_file: Option<PathBuf>,
+) -> PlatformPaths {
+    let data_dir = data_dir.unwrap_or_else(default_data_dir);
+    let config_dir = config_dir.unwrap_or_else(default_config_dir);
+    let runtime_dir = runtime_dir.unwrap_or_else(|| default_runtime_dir(&data_dir));
         let state_dir = data_dir.join("state");
         let state_file = state_dir.join("session.json.sealed");
         let state_backup_file = state_dir.join("session.json.sealed.bak");
         let key_file = config_dir.join("state.key");
-        let hosts_file = default_hosts_file();
+    let hosts_file = hosts_file.unwrap_or_else(default_hosts_file);
 
-        Self {
-            data_dir,
-            config_dir,
-            runtime_dir,
-            state_dir,
-            state_file,
-            state_backup_file,
-            key_file,
-            hosts_file,
-        }
+    PlatformPaths {
+        data_dir,
+        config_dir,
+        runtime_dir,
+        state_dir,
+        state_file,
+        state_backup_file,
+        key_file,
+        hosts_file,
     }
+}
+
+fn env_path(name: &str) -> Option<PathBuf> {
+    env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 #[derive(Debug, Clone)]
@@ -612,6 +640,7 @@ fn restrict_private_path(_path: &Path, _directory: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 fn path_should_be_hardened(path: &Path) -> bool {
     path.try_exists().unwrap_or(true)
 }
@@ -619,7 +648,36 @@ fn path_should_be_hardened(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use std::io::Write;
+
+    #[test]
+    fn detect_paths_honours_overrides() {
+        let paths = detect_with_overrides(
+            Some(PathBuf::from("/tmp/coldcat-data")),
+            Some(PathBuf::from("/tmp/coldcat-config")),
+            Some(PathBuf::from("/tmp/coldcat-run")),
+            Some(PathBuf::from("/tmp/coldcat-hosts")),
+        );
+
+        assert_eq!(paths.data_dir, PathBuf::from("/tmp/coldcat-data"));
+        assert_eq!(paths.config_dir, PathBuf::from("/tmp/coldcat-config"));
+        assert_eq!(paths.runtime_dir, PathBuf::from("/tmp/coldcat-run"));
+        assert_eq!(paths.state_dir, PathBuf::from("/tmp/coldcat-data/state"));
+        assert_eq!(
+            paths.state_file,
+            PathBuf::from("/tmp/coldcat-data/state/session.json.sealed")
+        );
+        assert_eq!(
+            paths.state_backup_file,
+            PathBuf::from("/tmp/coldcat-data/state/session.json.sealed.bak")
+        );
+        assert_eq!(
+            paths.key_file,
+            PathBuf::from("/tmp/coldcat-config/state.key")
+        );
+        assert_eq!(paths.hosts_file, PathBuf::from("/tmp/coldcat-hosts"));
+    }
 
     #[test]
     fn expands_friendly_desktop_app_name_to_enforceable_rules() {

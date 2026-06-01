@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use coldcat_core::client::send_command;
 use coldcat_core::duration::parse_duration_secs;
 use coldcat_core::protocol::{CommandRequest, CommandResponse, ServiceState};
-use coldcat_core::DEFAULT_DAEMON_ADDR;
+use coldcat_core::daemon_addr;
 use coldcat_platform::{
     discover_installed_apps, expand_app_rules, repair_installation, PlatformPaths,
 };
@@ -120,7 +120,7 @@ fn exit_for_response(response: CommandResponse) -> ! {
 
 fn doctor() -> Result<()> {
     let paths = PlatformPaths::detect();
-    println!("daemon_addr: {DEFAULT_DAEMON_ADDR}");
+    println!("daemon_addr: {}", daemon_addr());
     println!("data_dir: {}", paths.data_dir.display());
     println!("config_dir: {}", paths.config_dir.display());
     println!("runtime_dir: {}", paths.runtime_dir.display());

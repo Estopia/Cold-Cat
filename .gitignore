@@ -1,5 +1,6 @@
 target/
 dist/
+.coldcat-dev/
 *.pdb
 *.exe
 *.log

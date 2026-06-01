@@ -24,6 +24,29 @@ The main binaries are:
 - `target\release\coldcat-gui.exe`
 - `target\release\coldcat-setup.exe`
 
+## Local development
+
+For day-to-day development without installers, services, `sudo`, or touching the real hosts file, use:
+
+```bash
+cargo dev
+```
+
+`cargo dev` builds the debug daemon and GUI, then runs them against a workspace-local sandbox under `.coldcat-dev/`. The sandbox overrides the daemon address, state/config/runtime directories, GUI profile storage, and hosts file path so you can iterate locally on macOS, Linux, or Windows without writing to `/etc/hosts`, `/var/lib/cold-cat`, `/etc/cold-cat`, or `ProgramData`.
+
+Useful development commands:
+
+```bash
+cargo dev cli doctor
+cargo dev cli status
+cargo dev daemon
+cargo dev env
+```
+
+Delete `.coldcat-dev/` at any time to reset the local sandbox.
+
+This mode is for local UI, protocol, session, and rule-flow development. It does not replace native Windows or Ubuntu validation for the real privileged service, ACL/permission hardening, immutable hosts handling, or installer behaviour.
+
 ## Desktop GUI
 
 The GUI provides a Cold Turkey-style workflow without copying its exact visual design:
@@ -53,7 +76,7 @@ After the daemon service is installed and running, launch one of:
 coldcat-gui
 ```
 
-The GUI talks to the same daemon as the CLI over `127.0.0.1:47842`; it does not directly edit hosts files, kill processes, or alter sealed state.
+The GUI talks to the same daemon as the CLI, defaulting to `127.0.0.1:47842` and using the dev override address when `cargo dev` is active; it does not directly edit hosts files, kill processes, or alter sealed state.
 
 ## Windows setup/updater
 
