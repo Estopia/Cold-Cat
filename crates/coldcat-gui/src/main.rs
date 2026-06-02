@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use coldcat_core::client::send_command;
 use coldcat_core::duration::parse_duration_secs;
 use coldcat_core::protocol::{CommandRequest, CommandResponse, ServiceState, ServiceStatus};
+use coldcat_core::session::{normalize_apps, normalize_sites};
 use eframe::egui::{self, epaint::Shadow, Color32, RichText, Stroke};
 use serde::{Deserialize, Serialize};
 use sysinfo::{ProcessExt, System, SystemExt};
@@ -227,6 +228,7 @@ struct ColdCatApp {
     draft_name: String,
     profiles: Vec<BlockProfile>,
     selected_profile: Option<usize>,
+    profile_transfer_path: String,
     app_filter: String,
     app_candidates: Vec<AppCandidate>,
     last_app_scan: Option<Instant>,
@@ -257,6 +259,9 @@ impl Default for ColdCatApp {
             draft_name: "New block".to_string(),
             profiles: load_profiles(),
             selected_profile: None,
+            profile_transfer_path: default_profile_transfer_path()
+                .to_string_lossy()
+                .to_string(),
             app_filter: String::new(),
             app_candidates: Vec::new(),
             last_app_scan: None,
@@ -732,6 +737,23 @@ impl ColdCatApp {
         });
         ui.add_space(8.0);
 
+        ui.label(RichText::new("Import/export JSON file").color(MUTED));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.profile_transfer_path)
+                .desired_width(f32::INFINITY)
+                .hint_text("~/ColdCat-Profiles.json"),
+        );
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            if secondary_button(ui, "Export saved", 124.0, 34.0).clicked() {
+                self.export_profiles();
+            }
+            if secondary_button(ui, "Import profiles", 132.0, 34.0).clicked() {
+                self.import_profiles();
+            }
+        });
+        ui.add_space(12.0);
+
         if self.profiles.is_empty() {
             ui.label(RichText::new("No saved profiles yet.").color(MUTED));
             return;
@@ -1150,6 +1172,79 @@ impl ColdCatApp {
             Err(err) => {
                 self.error = Some(format!("Failed to save profiles: {err}"));
                 self.last_action = "Save failed".to_string();
+            }
+        }
+    }
+
+    fn export_profiles(&mut self) {
+        if self.profiles.is_empty() {
+            self.error = Some("Save at least one profile before exporting.".to_string());
+            self.last_action = "Export failed".to_string();
+            return;
+        }
+
+        let path = match profile_transfer_path(&self.profile_transfer_path) {
+            Ok(path) => path,
+            Err(err) => {
+                self.error = Some(err);
+                self.last_action = "Export failed".to_string();
+                return;
+            }
+        };
+
+        match export_profiles_to_path(&self.profiles, &path) {
+            Ok(()) => {
+                self.message = format!(
+                    "Exported {} {} to {}.",
+                    self.profiles.len(),
+                    profile_count_label(self.profiles.len()),
+                    path.display()
+                );
+                self.error = None;
+                self.last_action = "Exported profiles".to_string();
+            }
+            Err(err) => {
+                self.error = Some(format!("Failed to export profiles: {err}"));
+                self.last_action = "Export failed".to_string();
+            }
+        }
+    }
+
+    fn import_profiles(&mut self) {
+        let path = match profile_transfer_path(&self.profile_transfer_path) {
+            Ok(path) => path,
+            Err(err) => {
+                self.error = Some(err);
+                self.last_action = "Import failed".to_string();
+                return;
+            }
+        };
+
+        match import_profiles_from_path(&path) {
+            Ok(imported) => {
+                let mut profiles = self.profiles.clone();
+                let imported_count = merge_imported_profiles(&mut profiles, imported);
+                match save_profiles(&profiles) {
+                    Ok(()) => {
+                        self.profiles = profiles;
+                        self.selected_profile = None;
+                        self.message = format!(
+                            "Imported {imported_count} {} from {}.",
+                            profile_count_label(imported_count),
+                            path.display()
+                        );
+                        self.error = None;
+                        self.last_action = "Imported profiles".to_string();
+                    }
+                    Err(err) => {
+                        self.error = Some(format!("Failed to save imported profiles: {err}"));
+                        self.last_action = "Import failed".to_string();
+                    }
+                }
+            }
+            Err(err) => {
+                self.error = Some(format!("Failed to import profiles: {err}"));
+                self.last_action = "Import failed".to_string();
             }
         }
     }
@@ -1996,6 +2091,37 @@ fn profiles_path() -> PathBuf {
     }
 }
 
+fn default_profile_transfer_path() -> PathBuf {
+    home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ColdCat-Profiles.json")
+}
+
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
+fn profile_transfer_path(input: &str) -> Result<PathBuf, String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("Choose a JSON file path before importing or exporting.".to_string());
+    }
+
+    if input == "~" {
+        return home_dir().ok_or_else(|| "Could not resolve the home directory.".to_string());
+    }
+
+    if let Some(rest) = input.strip_prefix("~/") {
+        return home_dir()
+            .map(|home| home.join(rest))
+            .ok_or_else(|| "Could not resolve the home directory.".to_string());
+    }
+
+    Ok(PathBuf::from(input))
+}
+
 fn load_profiles() -> Vec<BlockProfile> {
     let path = profiles_path();
     let Ok(content) = fs::read_to_string(path) else {
@@ -2011,6 +2137,111 @@ fn save_profiles(profiles: &[BlockProfile]) -> Result<(), String> {
     }
     let content = serde_json::to_string_pretty(profiles).map_err(|err| err.to_string())?;
     fs::write(path, content).map_err(|err| err.to_string())
+}
+
+fn export_profiles_to_path(profiles: &[BlockProfile], path: &Path) -> Result<(), String> {
+    if profiles.is_empty() {
+        return Err("there are no saved profiles to export".to_string());
+    }
+
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+
+    let content = serde_json::to_string_pretty(profiles).map_err(|err| err.to_string())?;
+    fs::write(path, content).map_err(|err| err.to_string())
+}
+
+fn import_profiles_from_path(path: &Path) -> Result<Vec<BlockProfile>, String> {
+    let content = fs::read_to_string(path).map_err(|err| err.to_string())?;
+    parse_imported_profiles(&content)
+}
+
+fn parse_imported_profiles(content: &str) -> Result<Vec<BlockProfile>, String> {
+    let profiles = match serde_json::from_str::<Vec<BlockProfile>>(content) {
+        Ok(profiles) => profiles,
+        Err(list_err) => match serde_json::from_str::<BlockProfile>(content) {
+            Ok(profile) => vec![profile],
+            Err(_) => return Err(format!("invalid profile JSON: {list_err}")),
+        },
+    };
+
+    if profiles.is_empty() {
+        return Err("profile file did not contain any profiles".to_string());
+    }
+
+    profiles
+        .into_iter()
+        .enumerate()
+        .map(|(index, profile)| {
+            sanitize_imported_profile(profile)
+                .map_err(|err| format!("profile {}: {err}", index + 1))
+        })
+        .collect()
+}
+
+fn sanitize_imported_profile(profile: BlockProfile) -> Result<BlockProfile, String> {
+    let name = profile.name.trim();
+    if name.is_empty() {
+        return Err("name cannot be empty".to_string());
+    }
+
+    let duration = profile.duration.trim();
+    parse_duration_secs(duration).map_err(|err| format!("invalid duration: {err}"))?;
+
+    let sites =
+        normalize_sites(profile.sites).map_err(|err| format!("invalid website rule: {err}"))?;
+    let apps = normalize_imported_apps(profile.apps)?;
+
+    if sites.is_empty() && apps.is_empty() {
+        return Err("add at least one website or app rule".to_string());
+    }
+
+    Ok(BlockProfile {
+        name: name.to_string(),
+        duration: duration.to_string(),
+        sites,
+        apps,
+    })
+}
+
+fn normalize_imported_apps(apps: Vec<String>) -> Result<Vec<String>, String> {
+    let apps = normalize_apps(apps).map_err(|err| format!("invalid app rule: {err}"))?;
+    let mut deduped = Vec::new();
+    for app in apps {
+        add_unique_rule(&mut deduped, app);
+    }
+    Ok(deduped)
+}
+
+fn merge_imported_profiles(
+    existing_profiles: &mut Vec<BlockProfile>,
+    imported_profiles: Vec<BlockProfile>,
+) -> usize {
+    let imported_count = imported_profiles.len();
+    for profile in imported_profiles {
+        if let Some(existing) = existing_profiles
+            .iter_mut()
+            .find(|existing| existing.name.eq_ignore_ascii_case(&profile.name))
+        {
+            *existing = profile;
+        } else {
+            existing_profiles.push(profile);
+        }
+    }
+    existing_profiles.sort_by_key(|profile| profile.name.to_ascii_lowercase());
+    imported_count
+}
+
+fn profile_count_label(count: usize) -> &'static str {
+    if count == 1 {
+        "profile"
+    } else {
+        "profiles"
+    }
 }
 
 fn display_name_for_process(name: &str, exe: &Path) -> String {
@@ -2178,5 +2409,80 @@ mod tests {
             profile_preview(&profile),
             "Sites: reddit.com, youtube.com | Apps: discord.exe"
         );
+    }
+
+    #[test]
+    fn imports_single_profile_json() {
+        let imported = parse_imported_profiles(
+            r#"{
+                "name": " Focus ",
+                "duration": " 2h ",
+                "sites": ["Reddit.com", "reddit.com"],
+                "apps": [" Discord ", "discord"]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            imported,
+            vec![BlockProfile {
+                name: "Focus".to_string(),
+                duration: "2h".to_string(),
+                sites: vec!["reddit.com".to_string()],
+                apps: vec!["Discord".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn rejects_empty_imported_profiles() {
+        let err = parse_imported_profiles(
+            r#"[{
+                "name": "Empty",
+                "duration": "30m",
+                "sites": [],
+                "apps": []
+            }]"#,
+        )
+        .unwrap_err();
+
+        assert!(err.contains("add at least one website or app rule"));
+    }
+
+    #[test]
+    fn merges_imported_profiles_by_case_insensitive_name() {
+        let mut profiles = vec![BlockProfile {
+            name: "Focus".to_string(),
+            duration: "1h".to_string(),
+            sites: vec!["old.example".to_string()],
+            apps: Vec::new(),
+        }];
+        let imported = vec![BlockProfile {
+            name: "focus".to_string(),
+            duration: "2h".to_string(),
+            sites: vec!["new.example".to_string()],
+            apps: Vec::new(),
+        }];
+
+        assert_eq!(merge_imported_profiles(&mut profiles, imported), 1);
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].duration, "2h");
+        assert_eq!(profiles[0].sites, vec!["new.example"]);
+    }
+
+    #[test]
+    fn exports_and_imports_profile_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("profiles.json");
+        let profiles = vec![BlockProfile {
+            name: "Deep work".to_string(),
+            duration: "90m".to_string(),
+            sites: vec!["youtube.com".to_string()],
+            apps: vec!["steam".to_string()],
+        }];
+
+        export_profiles_to_path(&profiles, &path).unwrap();
+
+        assert_eq!(import_profiles_from_path(&path).unwrap(), profiles);
     }
 }

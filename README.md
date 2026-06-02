@@ -37,7 +37,7 @@ The GUI provides a Cold Turkey-style workflow without copying its exact visual d
 - app picker that scans running processes and installed desktop applications, including Linux `.desktop`, Snap, and Flatpak entries
 - search over discovered apps plus manual executable/name entry
 - built-in profiles for common focus sessions
-- saved custom profiles stored in the user's app config directory
+- saved custom profiles stored in the user's app config directory, with JSON import/export for backup or sharing
 - draft actions to save, clear, reload, start, or copy the active session into a new draft
 - optional auto-refresh for daemon/session status
 - solid primary-action buttons, including a prominent **Start enforced block** action

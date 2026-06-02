@@ -106,3 +106,14 @@ The Linux work is not done until:
 5. At least one regular app, one Snap or Flatpak app, and one browser/domain workflow are successfully blocked.
 6. GUI start/status/profile/app-selection workflows work on Ubuntu.
 7. Linux install/update/uninstall instructions are documented and tested.
+
+## Product backlog
+
+1. Ubuntu `.deb` installer for single-package installation without source builds.
+2. GitHub Releases packaging for downloadable signed/versioned builds.
+3. First-run setup wizard for daemon installation, repair, and status checks.
+4. Schedules or recurring blocks for planned focus windows.
+5. Import/export profiles for sharing and backing up saved block profiles.
+6. Better Linux app-blocking presets for common browsers, games, chat apps, and launchers.
+7. Block history or audit log for recent sessions and recovery events.
+8. Optional browser helper extension for stronger browser-level blocking.
