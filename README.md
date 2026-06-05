@@ -176,6 +176,8 @@ coldcat recover
 
 If app rules do not catch a Linux app, run `coldcat apps` and select the listed rule. Snap and Flatpak apps may launch wrapper processes first; Cold Cat expands desktop entries and command-line identifiers, but unusual AppImages or shell-wrapper launchers may still need a manual executable path or process name rule.
 
+If `journalctl -u coldcat.service` reports `Failed to set up mount namespacing: /run/cold-cat: No such file or directory`, reinstall or repair with `sudo packaging/linux/install.sh --repair`. The systemd unit should create `/run/cold-cat` at boot; this error means an older unit is still installed.
+
 ### Native Ubuntu validation checklist
 
 Do Linux release validation on native Ubuntu hardware, not by assuming Windows behavior applies. Before release, verify:
